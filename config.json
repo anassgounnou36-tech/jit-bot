@@ -1,0 +1,61 @@
+{
+  "chains": ["ethereum", "arbitrum"],
+  "targets": [
+    {
+      "pool": "WETH-USDC-0.3%",
+      "address": "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8",
+      "token0": "0xA0b86a33E6441b80B05fdC68F34f8c9C31C8DE4E",
+      "token1": "0xA0b86a33E6441b80B05fdC68F34f8c9C31C8DE4E",
+      "fee": 3000
+    },
+    {
+      "pool": "WETH-USDC-0.05%", 
+      "address": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
+      "token0": "0xA0b86a33E6441b80B05fdC68F34f8c9C31C8DE4E",
+      "token1": "0xA0b86a33E6441b80B05fdC68F34f8c9C31C8DE4E",
+      "fee": 500
+    },
+    {
+      "pool": "WBTC-USDC-0.3%",
+      "address": "0x99ac8cA7087fA4A2A1FB6357269965A2014ABc35",
+      "token0": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+      "token1": "0xA0b86a33E6441b80B05fdC68F34f8c9C31C8DE4E",
+      "fee": 3000
+    }
+  ],
+  "minProfitThreshold": 0.01,
+  "maxLoanSize": 1000000,
+  "tickRangeWidth": 60,
+  "gasPriceStrategy": "aggressive",
+  "slippageTolerance": 0.005,
+  "flashLoanProviders": {
+    "balancer": {
+      "vault": "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
+      "enabled": true,
+      "priority": 1
+    },
+    "aave": {
+      "poolAddressProvider": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
+      "enabled": true,
+      "priority": 2
+    }
+  },
+  "contracts": {
+    "ethereum": {
+      "uniswapV3PositionManager": "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+      "uniswapV3SwapRouter": "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+    },
+    "arbitrum": {
+      "uniswapV3PositionManager": "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+      "uniswapV3SwapRouter": "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+    }
+  },
+  "rpc": {
+    "ethereum": "wss://eth-mainnet.ws.alchemyapi.io/v2/YOUR_KEY",
+    "arbitrum": "wss://arb-mainnet.ws.alchemyapi.io/v2/YOUR_KEY"
+  },
+  "flashbots": {
+    "relayUrl": "https://relay.flashbots.net",
+    "enabled": true
+  }
+}
