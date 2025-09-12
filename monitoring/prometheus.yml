@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'jit-bot'
+    static_configs:
+      - targets: ['jit-bot:3001']
+    metrics_path: '/metrics/prometheus'
+    scrape_interval: 10s

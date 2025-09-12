@@ -1,0 +1,57 @@
+{
+  "name": "jit-bot",
+  "version": "1.0.0",
+  "description": "Just-In-Time Liquidity Provision bot for Uniswap V3",
+  "main": "index.js",
+  "scripts": {
+    "build": "hardhat compile",
+    "test": "hardhat test",
+    "test:coverage": "hardhat coverage",
+    "start": "node dist/bot/index.js",
+    "dev": "ts-node src/bot/index.ts",
+    "deploy": "hardhat run scripts/deploy.ts",
+    "simulate": "ts-node scripts/simulateExample.ts",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix"
+  },
+  "keywords": [
+    "ethereum",
+    "uniswap",
+    "jit",
+    "mev",
+    "flashloan",
+    "defi"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.0",
+    "@typechain/ethers-v5": "^10.2.0",
+    "@typechain/hardhat": "^6.1.6",
+    "@types/chai": "^4.3.0",
+    "@types/express": "^5.0.3",
+    "@types/mocha": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "chai": "^4.3.0",
+    "eslint": "^8.0.0",
+    "hardhat": "^2.19.0",
+    "hardhat-gas-reporter": "^1.0.9",
+    "solidity-coverage": "^0.8.5",
+    "ts-node": "^10.9.0",
+    "typechain": "^8.3.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.0",
+    "@uniswap/v3-core": "^1.0.1",
+    "@uniswap/v3-periphery": "^1.4.3",
+    "@uniswap/v3-sdk": "^3.10.0",
+    "dotenv": "^16.3.0",
+    "ethers": "^5.7.0",
+    "express": "^4.18.0",
+    "ws": "^8.14.0"
+  }
+}
