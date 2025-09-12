@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import { ethers } from "ethers";
 import { PoolCoordinator } from "../src/coordinator/poolCoordinator";
 import { Simulator } from "../src/watcher/simulator";
 import { BundleBuilder } from "../src/bundler/bundleBuilder";

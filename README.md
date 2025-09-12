@@ -4,12 +4,14 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
 
 ## 🚀 Features
 
-- **Mempool Monitoring**: Real-time detection of large Uniswap V3 swaps
+- **Multi-Pool Monitoring**: Concurrent monitoring of multiple Uniswap V3 pools with opportunity ranking
+- **Mempool Monitoring**: Real-time detection of large Uniswap V3 swaps across all target pools
+- **Opportunity Optimization**: Intelligent selection of the most profitable bundle per block
 - **Flash Loan Integration**: Zero-capital strategy using Balancer (primary) and Aave (fallback) flash loans
 - **Concentrated Liquidity**: Automated positioning around expected swap prices
 - **Flashbots Integration**: MEV-protected bundle execution with retry logic
-- **Risk Management**: Comprehensive safety checks and profit thresholds
-- **Monitoring & Metrics**: Built-in Prometheus metrics and HTTP dashboard
+- **Pool-Level Risk Management**: Per-pool failure tracking, auto-disable, and cooldown mechanisms
+- **Advanced Metrics**: Pool-specific profit tracking, success rates, and Prometheus metrics
 - **Multi-chain Support**: Ethereum mainnet and Arbitrum
 - **Live Execution**: Production-ready mainnet deployment with safety features
 - **Emergency Controls**: Pause functionality and stuck fund recovery
@@ -30,6 +32,23 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
 
 ## 🏗️ Architecture
 
+### Multi-Pool Mode (Default)
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Pool           │    │  Opportunity    │    │  Bundle Builder │
+│  Coordinator    │───▶│  Ranking        │───▶│                 │
+│                 │    │                 │    │                 │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+    ┌────┴────┐                  │                       │
+    ▼         ▼                  ▼                       ▼
+┌─────────┐ ┌─────────┐  ┌─────────────────┐    ┌─────────────────┐
+│ Pool A  │ │ Pool B  │  │  Metrics &      │    │  Flashbots      │
+│ Watcher │ │ Watcher │  │  Monitoring     │    │  Executor       │
+└─────────┘ └─────────┘  └─────────────────┘    └─────────────────┘
+```
+
+### Single-Pool Mode (Legacy)
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │  Mempool        │    │  Simulator      │    │  Bundle Builder │
@@ -110,6 +129,11 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
    FLASHBOTS_RELAY_URL=https://relay.flashbots.net
    FLASHBOTS_PRIVATE_KEY=0x...
    
+   # Multi-Pool Configuration
+   ENABLE_MULTI_POOL=true
+   POOL_IDS=WETH-USDC-0.05%,ETH-USDT-0.3%,WBTC-ETH-0.3%
+   PROFIT_THRESHOLD_USD=100.0
+   
    # Bot Configuration
    MIN_PROFIT_THRESHOLD=0.01
    MAX_LOAN_SIZE=1000000
@@ -120,15 +144,75 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
    {
      "targets": [
        {
-         "pool": "WETH-USDC-0.3%",
-         "address": "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8",
+         "pool": "WETH-USDC-0.05%",
+         "address": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
          "token0": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
          "token1": "0xA0b86a33E6441b80B05fdC68F34f8c9C31C8DE4E",
+         "fee": 500
+       },
+       {
+         "pool": "ETH-USDT-0.3%",
+         "address": "0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36",
+         "token0": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+         "token1": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
          "fee": 3000
        }
      ]
    }
    ```
+
+## 🔄 Multi-Pool Configuration
+
+The bot supports monitoring multiple Uniswap V3 pools simultaneously and selects the most profitable opportunity per block.
+
+### Pool Selection
+```bash
+# Enable multi-pool mode
+ENABLE_MULTI_POOL=true
+
+# Specify which pools to monitor (comma-separated)
+POOL_IDS=WETH-USDC-0.05%,ETH-USDT-0.3%,WBTC-ETH-0.3%
+
+# Global profit threshold (USD)
+PROFIT_THRESHOLD_USD=100.0
+```
+
+### Per-Pool Configuration
+```bash
+# Pool-specific profit thresholds (optional)
+POOL_PROFIT_THRESHOLD_USD__WETH_USDC_0_05_=150
+POOL_PROFIT_THRESHOLD_USD__ETH_USDT_0_3_=120
+POOL_PROFIT_THRESHOLD_USD__WBTC_ETH_0_3_=200
+
+# Pool failure management
+POOL_MAX_FAILURES=5          # Disable pool after N failures
+POOL_COOLDOWN_MS=300000      # Re-enable after 5 minutes
+MAX_CONCURRENT_WATCHERS=10   # Maximum concurrent pool watchers
+```
+
+### Orchestration Behavior
+
+1. **Concurrent Monitoring**: Each enabled pool runs its own mempool watcher
+2. **Opportunity Ranking**: When multiple opportunities are detected in the same block:
+   - All candidates are evaluated for profitability
+   - Only the most profitable opportunity is executed
+   - Other opportunities are skipped to avoid gas waste
+3. **Pool Management**: 
+   - Pools are automatically disabled after repeated failures
+   - Disabled pools are re-enabled after a cooldown period
+   - Pool status and metrics are tracked independently
+
+### Metrics Dashboard
+
+Pool-level metrics are available at `http://localhost:3001/metrics`:
+
+```
+# Pool-specific metrics
+jit_bot_pool_profit_usd{pool="WETH_USDC_0_05_"} 1250.50
+jit_bot_pool_success_rate{pool="WETH_USDC_0_05_"} 0.85
+jit_bot_pool_failure_count{pool="ETH_USDT_0_3_"} 0
+jit_bot_pool_enabled{pool="WBTC_ETH_0_3_"} 1
+```
 
 ## 🚀 Deployment
 
@@ -147,6 +231,26 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
 
 ## 🎮 Usage
 
+### Multi-Pool Mode (Recommended)
+```bash
+# Set up multi-pool configuration
+export ENABLE_MULTI_POOL=true
+export POOL_IDS=WETH-USDC-0.05%,ETH-USDT-0.3%,WBTC-ETH-0.3%
+export PROFIT_THRESHOLD_USD=100
+
+# Start the bot
+npm run dev
+```
+
+### Single-Pool Mode (Legacy)
+```bash
+# Disable multi-pool mode
+export ENABLE_MULTI_POOL=false
+
+# Start the bot
+npm run dev
+```
+
 ### Development Mode
 ```bash
 npm run dev
@@ -156,6 +260,17 @@ npm run dev
 ```bash
 npm run build
 npm start
+```
+
+### Live Execution Mode
+```bash
+# Set production environment
+export NODE_ENV=production
+export JIT_CONTRACT_ADDRESS=0x...
+export PRIVATE_KEY=0x...
+
+# Start in live mode
+npm run live
 ```
 
 ### Fork Simulation Mode
@@ -177,7 +292,7 @@ docker-compose up -d
 # Start the bot
 node dist/bot/index.js start
 
-# Check status
+# Check status (includes pool information)
 node dist/bot/index.js status
 
 # Run simulation
@@ -185,6 +300,45 @@ npm run simulate
 
 # Run fork simulation with real mainnet state
 npm run fork:simulate
+```
+
+### Monitoring Pool Status
+
+The bot status command now includes detailed pool information:
+
+```bash
+node dist/bot/index.js status
+```
+
+Example output:
+```json
+{
+  "isRunning": true,
+  "mode": "simulation",
+  "multiPool": {
+    "enabled": true,
+    "pools": {
+      "WETH-USDC-0.05%": {
+        "enabled": true,
+        "failureCount": 0,
+        "profitThresholdUSD": 150
+      },
+      "ETH-USDT-0.3%": {
+        "enabled": true,
+        "failureCount": 2,
+        "profitThresholdUSD": 100
+      }
+    },
+    "currentOpportunities": {
+      "18500123": [
+        {
+          "poolId": "WETH-USDC-0.05%",
+          "estimatedProfitUSD": 275
+        }
+      ]
+    }
+  }
+}
 ```
 
 ## 🧪 Fork Simulation Environment
