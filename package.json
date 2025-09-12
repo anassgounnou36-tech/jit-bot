@@ -29,9 +29,12 @@
   ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
-    "@nomicfoundation/hardhat-ethers": "^3.0.0",
-    "@typechain/ethers-v5": "^10.2.0",
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "@typechain/ethers-v5": "^10.2.1",
     "@typechain/hardhat": "^6.1.6",
     "@types/chai": "^4.3.0",
     "@types/express": "^5.0.3",
@@ -55,7 +58,7 @@
     "@uniswap/v3-periphery": "^1.4.3",
     "@uniswap/v3-sdk": "^3.10.0",
     "dotenv": "^16.3.0",
-    "ethers": "^5.7.0",
+    "ethers": "^5.7.2",
     "express": "^4.18.0",
     "ws": "^8.14.0"
   }
