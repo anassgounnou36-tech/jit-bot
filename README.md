@@ -1,16 +1,18 @@
 # JIT Liquidity Provision Bot for Uniswap V3
 
-A production-ready Just-In-Time (JIT) liquidity provision bot that automatically detects large pending swaps and provides concentrated liquidity to capture fees.
+A production-ready Just-In-Time (JIT) liquidity provision bot that automatically detects large pending swaps and provides concentrated liquidity to capture fees. Supports both simulation and live mainnet execution modes.
 
 ## 🚀 Features
 
 - **Mempool Monitoring**: Real-time detection of large Uniswap V3 swaps
 - **Flash Loan Integration**: Zero-capital strategy using Balancer (primary) and Aave (fallback) flash loans
 - **Concentrated Liquidity**: Automated positioning around expected swap prices
-- **Flashbots Integration**: MEV-protected bundle execution
+- **Flashbots Integration**: MEV-protected bundle execution with retry logic
 - **Risk Management**: Comprehensive safety checks and profit thresholds
 - **Monitoring & Metrics**: Built-in Prometheus metrics and HTTP dashboard
 - **Multi-chain Support**: Ethereum mainnet and Arbitrum
+- **Live Execution**: Production-ready mainnet deployment with safety features
+- **Emergency Controls**: Pause functionality and stuck fund recovery
 
 ## 📋 Table of Contents
 
@@ -20,6 +22,7 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
 - [Configuration](#configuration)
 - [Deployment](#deployment)
 - [Usage](#usage)
+- [Live Execution Mode](#live-execution-mode)
 - [Monitoring](#monitoring)
 - [Risk Management](#risk-management)
 - [Development](#development)
@@ -46,8 +49,7 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
 ### Components
 
 1. **Smart Contracts** (Solidity)
-   - `JitExecutor.sol`: Core contract handling flash loans and LP operations
-   - `BalancerFlashReceiver.sol`: Balancer Vault flash loan adapter
+   - `SimpleJitExecutor.sol`: Core contract handling flash loans and LP operations
    - `AaveFlashReceiver.sol`: Aave V3 flash loan fallback
    - Libraries for Uniswap V3 math and safe swapping
 
@@ -266,23 +268,208 @@ Example report structure:
 }
 ```
 
+## 🚀 Deployment
+
+### Fork Deployment (Testing)
+
+Deploy to a Hardhat fork for testing:
+
+```bash
+# 1. Start a local fork
+npm run fork
+
+# 2. Deploy contracts to fork
+npm run deploy:fork
+
+# 3. Set contract address in .env
+echo "JIT_CONTRACT_ADDRESS=<deployed_address>" >> .env
+```
+
+### Mainnet Deployment (Production)
+
+**⚠️ CRITICAL SAFETY WARNING ⚠️**
+
+Mainnet deployment involves real funds and carries significant financial risk. Only proceed if you:
+- Have thoroughly tested on forks
+- Understand MEV competition dynamics
+- Have monitoring and alerting in place
+- Are prepared for potential losses
+
+```bash
+# 1. Verify configuration
+cp .env.example .env
+# Edit .env with your production values
+
+# 2. Deploy to mainnet
+npm run deploy:mainnet
+
+# 3. Verify deployment (optional)
+VERIFY_CONTRACTS=true npm run deploy:mainnet
+
+# 4. Fund the contract with gas ETH
+# Send ~0.1 ETH to the deployed contract address
+
+# 5. Start monitoring
+docker-compose -f docker-compose.monitoring.yml up -d
+```
+
+### Deployment Configuration
+
+Environment variables for deployment:
+
+| Variable | Description | Required | Example |
+|----------|-------------|----------|---------|
+| `PRIVATE_KEY` | Deployer private key | Yes | `0x123...` |
+| `ETHEREUM_RPC_URL` | RPC endpoint | Yes | `https://...` |
+| `MIN_PROFIT_THRESHOLD` | Min profit in ETH | No | `0.01` |
+| `MAX_LOAN_SIZE` | Max loan size in ETH | No | `1000` |
+| `VERIFY_CONTRACTS` | Verify on Etherscan | No | `true` |
+| `ETHERSCAN_API_KEY` | Etherscan API key | No | `ABC123...` |
+
+### Post-Deployment Steps
+
+1. **Fund Contract**: Send ETH for gas costs
+2. **Configure Monitoring**: Set up alerts and dashboards
+3. **Test Execution**: Run simulation mode first
+4. **Start Live Mode**: Only after thorough testing
+
+## 🎯 Live Execution Mode
+
+### Starting Live Mode
+
+```bash
+# Start in live mode (uses real funds!)
+NODE_ENV=production npm run live
+```
+
+### Live Mode Features
+
+- **Real-time Execution**: Monitors mainnet mempool for opportunities
+- **Profit Thresholds**: Only executes above configured USD thresholds
+- **Gas Price Limits**: Respects maximum gas price settings
+- **Retry Logic**: Automatic retry with exponential backoff
+- **Safety Checks**: Multiple validation layers before execution
+- **Emergency Shutdown**: Automatic shutdown on critical errors
+
+### Live Mode Configuration
+
+| Variable | Description | Default | Mainnet Recommended |
+|----------|-------------|---------|-------------------|
+| `PROFIT_THRESHOLD_USD` | Min profit in USD | `10.0` | `50.0` - `100.0` |
+| `MAX_GAS_GWEI` | Max gas price in gwei | `100` | `150` - `200` |
+| `FLASHBOTS_RELAY_URL` | Flashbots endpoint | Required | `https://relay.flashbots.net` |
+| `FLASHBOTS_PRIVATE_KEY` | Flashbots signing key | Optional | Recommended |
+
+### Live Mode Safety Checks
+
+Before each execution, the bot performs:
+
+1. **Profit Verification**: Ensures estimated profit exceeds threshold
+2. **Gas Price Check**: Validates current gas price is acceptable
+3. **Contract Balance**: Confirms sufficient ETH for gas
+4. **Network Status**: Verifies RPC connectivity and block progression
+5. **Bundle Validation**: Comprehensive transaction validation
+
+### Live Mode Monitoring
+
+Essential monitoring for live mode:
+
+```bash
+# Health check
+curl http://localhost:3001/health
+
+# Live execution metrics
+curl http://localhost:3001/live-executions
+
+# Alert status
+curl http://localhost:3001/alerts
+```
+
+### Emergency Procedures
+
+#### Emergency Pause
+```solidity
+// Call from owner address
+jitExecutor.setPaused(true);
+```
+
+#### Stuck Fund Recovery
+```solidity
+// Withdraw ETH
+jitExecutor.emergencyWithdraw(address(0), amount);
+
+// Withdraw ERC20 tokens
+jitExecutor.emergencyWithdraw(tokenAddress, amount);
+```
+
+#### Emergency Shutdown
+```bash
+# Graceful shutdown
+pkill -SIGTERM -f "npm run live"
+
+# Force shutdown
+pkill -SIGKILL -f "npm run live"
+```
+
 ## 📊 Monitoring
 
-### Metrics Dashboard
-Access the built-in dashboard at `http://localhost:3001/metrics`
+### Production Monitoring Stack
 
-### Prometheus Metrics
-Metrics are available at `http://localhost:3001/metrics/prometheus`
+Start the complete monitoring stack:
 
-### Key Metrics
-- `jit_bot_swaps_detected_total`: Total swaps detected
-- `jit_bot_bundles_submitted_total`: Total bundles submitted
-- `jit_bot_success_rate`: Bundle inclusion success rate
-- `jit_bot_total_profit_eth`: Total profit in ETH
-- `jit_bot_net_profit_eth`: Net profit after gas costs
+```bash
+docker-compose -f docker-compose.monitoring.yml up -d
+```
 
-### Grafana Dashboard
-Import the provided Grafana dashboard from `monitoring/grafana-dashboard.json`
+This deploys:
+- **Prometheus**: Metrics collection (`http://localhost:9090`)
+- **Grafana**: Visualization (`http://localhost:3000`)
+- **AlertManager**: Alert routing (`http://localhost:9093`)
+- **Node Exporter**: System metrics
+
+### Key Dashboards
+
+#### JIT Bot Metrics (`http://localhost:3001/metrics`)
+- Real-time profit tracking
+- Execution success rates
+- Error monitoring
+- Performance metrics
+
+#### Prometheus Metrics (`http://localhost:3001/metrics/prometheus`)
+- `jit_bot_swaps_detected_total`: Total opportunities detected
+- `jit_bot_bundles_included_total`: Successful executions
+- `jit_bot_realized_profit_eth`: Live mode profits
+- `jit_bot_success_rate`: Bundle inclusion rate
+- `jit_bot_live_profit_usd`: USD profit tracking
+- `jit_bot_gas_efficiency`: Profit/gas ratio
+
+#### Health Checks (`http://localhost:3001/health`)
+- System status
+- Recent activity validation
+- Error rate monitoring
+
+### Alert Configuration
+
+Configure Slack/Discord alerts in `monitoring/alertmanager.yml`:
+
+```yaml
+global:
+  slack_api_url: 'https://hooks.slack.com/services/YOUR/WEBHOOK'
+
+receivers:
+  - name: 'critical-alerts'
+    slack_configs:
+      - channel: '#jit-bot-alerts'
+        title: '🚨 CRITICAL: JIT Bot Alert'
+```
+
+### Critical Alerts
+
+- **High Error Rate**: >30% execution failures
+- **No Activity**: No swaps detected for 30+ minutes
+- **Negative Profit**: Net losses detected
+- **System Down**: Application unresponsive
+- **Poor Gas Efficiency**: Low profit/gas ratios
 
 ## 🛡️ Risk Management
 

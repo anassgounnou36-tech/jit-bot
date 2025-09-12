@@ -1,0 +1,100 @@
+groups:
+  - name: jit_bot_alerts
+    rules:
+      # High Error Rate Alert
+      - alert: JitBotHighErrorRate
+        expr: jit_bot_execution_errors_total / jit_bot_swaps_detected_total > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          component: jit-bot
+        annotations:
+          summary: "JIT Bot has high error rate"
+          description: "JIT Bot error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      # No Recent Activity Alert
+      - alert: JitBotNoActivity
+        expr: time() - jit_bot_last_swap_detected > 1800
+        for: 0m
+        labels:
+          severity: warning
+          component: jit-bot
+        annotations:
+          summary: "JIT Bot has no recent activity"
+          description: "No swap activity detected for more than 30 minutes"
+
+      # Low Success Rate Alert
+      - alert: JitBotLowSuccessRate
+        expr: jit_bot_success_rate < 0.1 and jit_bot_bundles_submitted_total > 10
+        for: 10m
+        labels:
+          severity: critical
+          component: jit-bot
+        annotations:
+          summary: "JIT Bot has very low success rate"
+          description: "Bundle success rate is {{ $value | humanizePercentage }} - check MEV competition and gas prices"
+
+      # Negative Profit Alert
+      - alert: JitBotNegativeProfit
+        expr: jit_bot_net_profit_eth < 0
+        for: 5m
+        labels:
+          severity: critical
+          component: jit-bot
+        annotations:
+          summary: "JIT Bot is losing money"
+          description: "Net profit is {{ $value }} ETH - immediate attention required"
+
+      # Live Mode Profit Target Alert
+      - alert: JitBotLiveProfitLow
+        expr: jit_bot_mode == 1 and jit_bot_live_profit_usd < 100 and time() - jit_bot_uptime_seconds > 3600
+        for: 30m
+        labels:
+          severity: warning
+          component: jit-bot
+        annotations:
+          summary: "Low live profit after 1 hour"
+          description: "Live mode profit is only ${{ $value }} after 1+ hours of operation"
+
+      # Gas Efficiency Alert
+      - alert: JitBotPoorGasEfficiency
+        expr: jit_bot_gas_efficiency < 0.5 and jit_bot_live_executions_total > 5
+        for: 15m
+        labels:
+          severity: warning
+          component: jit-bot
+        annotations:
+          summary: "Poor gas efficiency detected"
+          description: "Gas efficiency ratio is {{ $value }} - consider adjusting strategy"
+
+      # System Health Alerts
+      - alert: JitBotDown
+        expr: up{job="jit-bot"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: jit-bot
+        annotations:
+          summary: "JIT Bot is down"
+          description: "JIT Bot application is not responding"
+
+      # Memory/CPU Alerts (if node-exporter is available)
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}% on {{ $labels.instance }}"

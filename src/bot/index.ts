@@ -9,6 +9,15 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
+export interface BotConfig {
+  mode: 'simulation' | 'live';
+  network: string;
+  profitThresholdUSD: number;
+  maxGasGwei: number;
+  retryAttempts: number;
+  retryDelayMs: number;
+}
+
 export class JitBot {
   private provider: ethers.providers.JsonRpcProvider;
   private mempoolWatcher: MempoolWatcher;
@@ -18,8 +27,26 @@ export class JitBot {
   private metrics: Metrics;
   private isRunning: boolean = false;
   private contractAddress: string;
+  private config: BotConfig;
 
   constructor() {
+    // Determine execution mode
+    const isProduction = process.env.NODE_ENV === 'production';
+    const mode = isProduction ? 'live' : 'simulation';
+    
+    // Initialize configuration
+    this.config = {
+      mode,
+      network: mode === 'live' ? 'mainnet' : 'fork',
+      profitThresholdUSD: parseFloat(process.env.PROFIT_THRESHOLD_USD || '10.0'),
+      maxGasGwei: parseFloat(process.env.MAX_GAS_GWEI || '100'),
+      retryAttempts: 3,
+      retryDelayMs: 1000
+    };
+
+    console.log(`🤖 Starting JIT Bot in ${this.config.mode.toUpperCase()} mode`);
+    console.log(`🌐 Target network: ${this.config.network}`);
+
     // Initialize provider
     const rpcUrl = process.env.ETHEREUM_RPC_URL || config.rpc.ethereum;
     this.provider = new ethers.providers.JsonRpcProvider(rpcUrl.replace('wss://', 'https://'));
@@ -34,10 +61,14 @@ export class JitBot {
     
     this.bundleBuilder = new BundleBuilder(process.env.PRIVATE_KEY, this.provider);
     this.executor = new Executor(this.provider);
-    this.metrics = new Metrics(parseInt(process.env.METRICS_PORT || '3001'));
+    this.metrics = new Metrics(parseInt(process.env.METRICS_PORT || '3001'), this.config.mode === 'live');
     
     // Set contract address (would be deployed)
     this.contractAddress = process.env.JIT_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000';
+    
+    if (this.config.mode === 'live' && this.contractAddress === '0x0000000000000000000000000000000000000000') {
+      throw new Error('JIT_CONTRACT_ADDRESS must be set for live mode');
+    }
     
     this.setupEventHandlers();
   }
@@ -63,11 +94,21 @@ export class JitBot {
     process.on('uncaughtException', (error: Error) => {
       console.error('❌ Uncaught exception:', error);
       this.metrics.recordExecutionError(error.message);
+      
+      if (this.config.mode === 'live') {
+        console.log('🚨 Critical error in live mode, shutting down for safety');
+        this.stop();
+      }
     });
 
     process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
       console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
       this.metrics.recordExecutionError(`Unhandled rejection: ${String(reason)}`);
+      
+      if (this.config.mode === 'live') {
+        console.log('🚨 Critical error in live mode, shutting down for safety');
+        this.stop();
+      }
     });
   }
 
@@ -79,6 +120,8 @@ export class JitBot {
 
     console.log('🚀 Starting JIT Bot...');
     console.log(`📊 Metrics server will be available at http://localhost:${process.env.METRICS_PORT || '3001'}`);
+    console.log(`💰 Profit threshold: $${this.config.profitThresholdUSD} USD`);
+    console.log(`⛽ Max gas price: ${this.config.maxGasGwei} gwei`);
 
     try {
       // Start metrics server
@@ -87,11 +130,16 @@ export class JitBot {
       // Validate configuration
       await this.validateConfiguration();
 
+      // Additional safety checks for live mode
+      if (this.config.mode === 'live') {
+        await this.performLiveModeChecks();
+      }
+
       // Start mempool watcher
       await this.mempoolWatcher.start();
 
       this.isRunning = true;
-      console.log('✅ JIT Bot started successfully');
+      console.log(`✅ JIT Bot started successfully in ${this.config.mode} mode`);
       console.log('🔍 Monitoring mempool for opportunities...');
 
       // Keep the process alive
@@ -139,7 +187,17 @@ export class JitBot {
 
     // Check contract address
     if (this.contractAddress === '0x0000000000000000000000000000000000000000') {
+      if (this.config.mode === 'live') {
+        throw new Error('JIT contract address must be set for live mode');
+      }
       console.log('⚠️ Warning: JIT contract address not set, using placeholder');
+    } else {
+      // Verify contract exists
+      const code = await this.provider.getCode(this.contractAddress);
+      if (code === '0x') {
+        throw new Error(`No contract found at address ${this.contractAddress}`);
+      }
+      console.log(`✅ JIT contract verified at ${this.contractAddress}`);
     }
 
     // Validate wallet
@@ -147,11 +205,41 @@ export class JitBot {
     const balance = await wallet.getBalance();
     console.log(`💰 Wallet balance: ${ethers.utils.formatEther(balance)} ETH`);
 
-    if (balance.lt(ethers.utils.parseEther('0.1'))) {
-      console.log('⚠️ Warning: Low wallet balance (< 0.1 ETH)');
+    const minBalance = this.config.mode === 'live' ? '0.1' : '0.01';
+    if (balance.lt(ethers.utils.parseEther(minBalance))) {
+      const message = `Low wallet balance (< ${minBalance} ETH)`;
+      if (this.config.mode === 'live') {
+        throw new Error(message);
+      }
+      console.log(`⚠️ Warning: ${message}`);
     }
 
     console.log('✅ Configuration validated');
+  }
+
+  private async performLiveModeChecks(): Promise<void> {
+    console.log('🔒 Performing live mode safety checks...');
+
+    // Check Flashbots configuration
+    if (!process.env.FLASHBOTS_RELAY_URL) {
+      throw new Error('FLASHBOTS_RELAY_URL must be set for live mode');
+    }
+
+    // Verify we're on mainnet
+    const network = await this.provider.getNetwork();
+    if (network.chainId !== 1) {
+      throw new Error(`Expected mainnet (chainId: 1), got chainId: ${network.chainId}`);
+    }
+
+    // Check gas price limits
+    const currentGasPrice = await this.provider.getGasPrice();
+    const currentGwei = parseFloat(ethers.utils.formatUnits(currentGasPrice, 'gwei'));
+    
+    if (currentGwei > this.config.maxGasGwei) {
+      console.log(`⚠️ Warning: Current gas price (${currentGwei} gwei) exceeds limit (${this.config.maxGasGwei} gwei)`);
+    }
+
+    console.log('✅ Live mode safety checks passed');
   }
 
   private async handleSwapDetected(swap: PendingSwap): Promise<void> {
@@ -179,15 +267,25 @@ export class JitBot {
       opportunity.estimatedProfit = simulationResult.estimatedProfit.toString();
       opportunity.profitable = simulationResult.profitable;
 
-      if (!simulationResult.profitable) {
-        console.log(`❌ Simulation shows unprofitable: ${simulationResult.reason}`);
-        this.metrics.recordSimulationFailure(simulationResult.reason || 'Unprofitable');
+      // Step 3: Apply profit threshold check
+      if (!this.isProfitable(simulationResult, swap)) {
+        console.log(`❌ Below profit threshold: ${simulationResult.reason}`);
+        this.metrics.recordSimulationFailure(simulationResult.reason || 'Below threshold');
         return;
       }
 
       console.log(`✅ Simulation successful, estimated profit: ${ethers.utils.formatEther(simulationResult.estimatedProfit)} ETH`);
 
-      // Step 3: Build Flashbots bundle
+      // Step 4: Gas price check for live mode
+      if (this.config.mode === 'live') {
+        const gasCheck = await this.checkGasPrice();
+        if (!gasCheck.acceptable) {
+          console.log(`❌ Gas price too high: ${gasCheck.currentGwei} gwei > ${this.config.maxGasGwei} gwei`);
+          return;
+        }
+      }
+
+      // Step 5: Build Flashbots bundle
       const bundle = await this.bundleBuilder.buildJitBundle(swap, jitParams, this.contractAddress);
 
       if (!this.bundleBuilder.validateBundle(bundle)) {
@@ -198,8 +296,8 @@ export class JitBot {
 
       this.metrics.recordBundleSubmitted(JSON.stringify(bundle));
 
-      // Step 4: Execute the bundle
-      const executionResult = await this.executor.executeBundle(bundle);
+      // Step 6: Execute the bundle (with retry logic for live mode)
+      const executionResult = await this.executeWithRetry(bundle);
 
       opportunity.executed = executionResult.success;
 
@@ -220,6 +318,68 @@ export class JitBot {
       this.metrics.recordExecutionError(error.message);
       opportunity.reason = error.message;
     }
+  }
+
+  private isProfitable(simulationResult: any, swap: PendingSwap): boolean {
+    if (!simulationResult.profitable) {
+      return false;
+    }
+
+    // Convert profit to USD (simplified - would need price oracle)
+    const ethPrice = 2000; // $2000 per ETH (would fetch from oracle)
+    const profitETH = parseFloat(ethers.utils.formatEther(simulationResult.estimatedProfit));
+    const profitUSD = profitETH * ethPrice;
+
+    return profitUSD >= this.config.profitThresholdUSD;
+  }
+
+  private async checkGasPrice(): Promise<{ acceptable: boolean; currentGwei: number }> {
+    const currentGasPrice = await this.provider.getGasPrice();
+    const currentGwei = parseFloat(ethers.utils.formatUnits(currentGasPrice, 'gwei'));
+    
+    return {
+      acceptable: currentGwei <= this.config.maxGasGwei,
+      currentGwei
+    };
+  }
+
+  private async executeWithRetry(bundle: any): Promise<any> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
+      try {
+        console.log(`📤 Executing bundle (attempt ${attempt}/${this.config.retryAttempts})`);
+        
+        const result = await this.executor.executeBundle(bundle);
+        
+        if (result.success) {
+          return result;
+        }
+        
+        lastError = new Error(result.error || 'Execution failed');
+        
+        if (attempt < this.config.retryAttempts) {
+          const delay = this.config.retryDelayMs * attempt;
+          console.log(`⏳ Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+      } catch (error: any) {
+        lastError = error;
+        console.error(`❌ Execution attempt ${attempt} failed:`, error.message);
+        
+        if (attempt < this.config.retryAttempts) {
+          const delay = this.config.retryDelayMs * attempt;
+          console.log(`⏳ Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    return {
+      success: false,
+      error: lastError?.message || 'All retry attempts failed'
+    };
   }
 
   private async calculateJitParameters(swap: PendingSwap): Promise<JitParameters> {
@@ -266,7 +426,11 @@ export class JitBot {
     setInterval(() => {
       if (this.isRunning) {
         const metrics = this.metrics.getMetrics();
-        console.log(`📊 Status: ${metrics.totalSwapsDetected} swaps detected, ${metrics.totalBundlesIncluded} successful executions`);
+        console.log(`📊 Status [${this.config.mode}]: ${metrics.totalSwapsDetected} swaps detected, ${metrics.totalBundlesIncluded} successful executions`);
+        
+        if (this.config.mode === 'live') {
+          console.log(`💰 Total profit: ${ethers.utils.formatEther(metrics.totalProfitEth || '0')} ETH`);
+        }
       }
     }, 60000);
   }
@@ -275,9 +439,12 @@ export class JitBot {
   getStatus(): any {
     return {
       isRunning: this.isRunning,
+      mode: this.config.mode,
+      network: this.config.network,
       contractAddress: this.contractAddress,
+      config: this.config,
       metrics: this.metrics.getMetrics(),
-      config: {
+      botConfig: {
         minProfitThreshold: config.minProfitThreshold,
         maxLoanSize: config.maxLoanSize,
         tickRangeWidth: config.tickRangeWidth,
@@ -307,11 +474,15 @@ if (require.main === module) {
       break;
 
     default:
-      console.log('Usage: node dist/bot/index.js [start|status]');
+      console.log('Usage: ts-node src/bot/index.ts [start|status]');
       console.log('');
       console.log('Commands:');
       console.log('  start   - Start the JIT bot');
       console.log('  status  - Show bot status');
+      console.log('');
+      console.log('Environment:');
+      console.log('  NODE_ENV=production - Run in live mode');
+      console.log('  NODE_ENV=development - Run in simulation mode (default)');
       process.exit(1);
   }
 }
