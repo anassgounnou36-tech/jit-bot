@@ -159,7 +159,7 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   // Estimate profit from a swap (simplified calculation)
-  private estimateProfit(swap: PendingSwap): ethers.BigNumber {
+  // private estimateProfit(swap: PendingSwap): ethers.BigNumber {
     // This is a simplified calculation
     // In reality, you'd need to:
     // 1. Calculate pool price impact
@@ -167,9 +167,9 @@ export class MempoolWatcher extends EventEmitter {
     // 3. Account for gas costs
     // 4. Account for flash loan fees
     
-    const amountIn = ethers.BigNumber.from(swap.amountIn);
-    const estimatedFee = amountIn.div(1000); // 0.1% fee estimate
+    // const amountIn = ethers.BigNumber.from(swap.amountIn);
+    // const estimatedFee = amountIn.div(1000); // 0.1% fee estimate
     
-    return estimatedFee;
-  }
+    // return estimatedFee;
+  // }
 }

@@ -54,7 +54,7 @@ export class Simulator {
 
       return result;
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Simulation failed:', error);
       return {
         profitable: false,
@@ -124,7 +124,7 @@ export class Simulator {
 
   calculateOptimalTickRange(
     currentPrice: ethers.BigNumber,
-    targetPrice: ethers.BigNumber,
+    _targetPrice: ethers.BigNumber,
     tickSpacing: number
   ): { tickLower: number; tickUpper: number } {
     // Simplified tick calculation
@@ -154,9 +154,9 @@ export class Simulator {
   }
 
   async estimateSwapPriceImpact(
-    pool: string,
-    tokenIn: string,
-    tokenOut: string,
+    _pool: string,
+    _tokenIn: string,
+    _tokenOut: string,
     amountIn: ethers.BigNumber
   ): Promise<{ priceImpact: number; expectedAmountOut: ethers.BigNumber }> {
     // Simplified price impact calculation
@@ -174,7 +174,7 @@ export class Simulator {
   async validateProfitability(
     simulation: SimulationResult,
     minProfitThreshold: string
-  ): boolean {
+  ): Promise<boolean> {
     const threshold = ethers.utils.parseEther(minProfitThreshold);
     return simulation.netProfit.gte(threshold);
   }

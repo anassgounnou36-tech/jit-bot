@@ -60,14 +60,14 @@ export class JitBot {
     });
 
     // Handle uncaught exceptions
-    process.on('uncaughtException', (error) => {
+    process.on('uncaughtException', (error: Error) => {
       console.error('❌ Uncaught exception:', error);
       this.metrics.recordExecutionError(error.message);
     });
 
-    process.on('unhandledRejection', (reason, promise) => {
+    process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
       console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
-      this.metrics.recordExecutionError(`Unhandled rejection: ${reason}`);
+      this.metrics.recordExecutionError(`Unhandled rejection: ${String(reason)}`);
     });
   }
 
@@ -97,7 +97,7 @@ export class JitBot {
       // Keep the process alive
       this.keepAlive();
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Failed to start JIT Bot:', error);
       this.metrics.recordExecutionError(error.message);
       throw error;
@@ -133,7 +133,7 @@ export class JitBot {
     try {
       const blockNumber = await this.provider.getBlockNumber();
       console.log(`✅ Connected to Ethereum (block ${blockNumber})`);
-    } catch (error) {
+    } catch (error: any) {
       throw new Error(`Failed to connect to RPC: ${error.message}`);
     }
 
@@ -215,7 +215,7 @@ export class JitBot {
         this.metrics.recordExecutionError(executionResult.error || 'Unknown error');
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(`❌ Error processing swap ${swap.hash}:`, error);
       this.metrics.recordExecutionError(error.message);
       opportunity.reason = error.message;

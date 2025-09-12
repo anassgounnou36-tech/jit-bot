@@ -68,7 +68,7 @@ export class Executor {
       console.log(`📊 Bundle execution result: ${result.success ? 'Success' : 'Failed'}`);
       return result;
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Bundle execution failed:', error);
       return {
         success: false,
@@ -108,7 +108,7 @@ export class Executor {
       console.log('✅ Bundle simulation successful');
       return { success: true };
 
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
         error: `Simulation error: ${error.message}`
@@ -117,8 +117,6 @@ export class Executor {
   }
 
   private async submitBundle(bundle: FlashbotsBundle): Promise<string | null> {
-    let lastError: Error | null = null;
-
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
         console.log(`📤 Submitting bundle (attempt ${attempt}/${this.maxRetries})`);
@@ -134,8 +132,7 @@ export class Executor {
           return bundleHash;
         }
 
-      } catch (error) {
-        lastError = error;
+      } catch (error: any) {
         console.error(`❌ Bundle submission attempt ${attempt} failed:`, error.message);
         
         if (attempt < this.maxRetries) {
@@ -205,7 +202,7 @@ export class Executor {
       
       if (stats.isIncluded) {
         // Bundle was included, analyze the results
-        const block = await this.provider.getBlock(blockNumber, true);
+        const block = await this.provider.getBlock(blockNumber);
         
         if (!block) {
           return {
@@ -227,7 +224,7 @@ export class Executor {
       // Bundle status unknown, continue monitoring
       return { success: undefined as any };
 
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
         error: `Error checking bundle inclusion: ${error.message}`
@@ -245,14 +242,14 @@ export class Executor {
       let totalGasPrice = ethers.BigNumber.from(0);
       let transactionCount = 0;
 
-      for (const tx of block.transactions) {
-        if (typeof tx === 'string') continue;
-        
-        const receipt = await this.provider.getTransactionReceipt(tx.hash);
+      // Note: In ethers v5, block.transactions is string[] by default
+      // To get full transaction objects, we'd need to fetch them separately
+      for (const txHash of block.transactions) {
+        const receipt = await this.provider.getTransactionReceipt(txHash);
         
         if (receipt && receipt.status === 1) {
           totalGasUsed = totalGasUsed.add(receipt.gasUsed);
-          totalGasPrice = totalGasPrice.add(tx.gasPrice || 0);
+          totalGasPrice = totalGasPrice.add(receipt.effectiveGasPrice || 0);
           transactionCount++;
         }
       }
@@ -274,7 +271,7 @@ export class Executor {
         profit: ethers.BigNumber.from(0) // Would be calculated from contract events
       };
 
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
         error: `Error analyzing results: ${error.message}`

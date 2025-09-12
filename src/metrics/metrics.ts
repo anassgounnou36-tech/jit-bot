@@ -77,7 +77,7 @@ export class Metrics {
     this.app.use(express.json());
 
     // Health check endpoint
-    this.app.get('/health', (req, res) => {
+    this.app.get('/health', (_req, res) => {
       res.json({
         status: 'healthy',
         uptime: this.getUptime(),
@@ -86,13 +86,13 @@ export class Metrics {
     });
 
     // Main metrics endpoint
-    this.app.get('/metrics', (req, res) => {
+    this.app.get('/metrics', (_req, res) => {
       this.updateCalculatedMetrics();
       res.json(this.metrics);
     });
 
     // Detailed metrics endpoint
-    this.app.get('/metrics/detailed', (req, res) => {
+    this.app.get('/metrics/detailed', (_req, res) => {
       this.updateCalculatedMetrics();
       res.json({
         ...this.metrics,
@@ -114,7 +114,7 @@ export class Metrics {
     });
 
     // Prometheus metrics endpoint
-    this.app.get('/metrics/prometheus', (req, res) => {
+    this.app.get('/metrics/prometheus', (_req, res) => {
       res.set('Content-Type', 'text/plain');
       res.send(this.generatePrometheusMetrics());
     });
