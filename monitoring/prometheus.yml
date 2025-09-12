@@ -1,9 +1,38 @@
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "jit_bot_alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
 
 scrape_configs:
+  # JIT Bot Application Metrics
   - job_name: 'jit-bot'
     static_configs:
       - targets: ['jit-bot:3001']
     metrics_path: '/metrics/prometheus'
     scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # JIT Bot Health Checks
+  - job_name: 'jit-bot-health'
+    static_configs:
+      - targets: ['jit-bot:3001']
+    metrics_path: '/health'
+    scrape_interval: 30s
+
+  # System Metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Prometheus Self-Monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
