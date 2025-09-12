@@ -19,10 +19,17 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
-      forking: {
-        url: process.env.ETHEREUM_RPC_URL || "https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY",
-        blockNumber: 18500000, // Recent block for testing
-      },
+      forking: process.env.ETHEREUM_RPC_URL ? {
+        url: process.env.ETHEREUM_RPC_URL,
+        blockNumber: process.env.FORK_BLOCK_NUMBER ? parseInt(process.env.FORK_BLOCK_NUMBER) : undefined,
+      } : undefined,
+      allowUnlimitedContractSize: true,
+      gas: 12000000,
+      blockGasLimit: 12000000,
+    },
+    fork: {
+      url: "http://127.0.0.1:8545",
+      timeout: 60000,
     },
     mainnet: {
       url: process.env.ETHEREUM_RPC_URL || "",
