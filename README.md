@@ -156,6 +156,15 @@ npm run build
 npm start
 ```
 
+### Fork Simulation Mode
+```bash
+# Start a local fork of Ethereum mainnet
+npm run fork
+
+# Run JIT LP simulations against the fork
+npm run fork:simulate
+```
+
 ### Docker Deployment
 ```bash
 docker-compose up -d
@@ -171,6 +180,90 @@ node dist/bot/index.js status
 
 # Run simulation
 npm run simulate
+
+# Run fork simulation with real mainnet state
+npm run fork:simulate
+```
+
+## 🧪 Fork Simulation Environment
+
+The JIT LP bot includes a comprehensive forked mainnet simulation environment that allows testing against real Ethereum state at specific block numbers.
+
+### Running Fork Simulations
+
+1. **Set up environment variables:**
+   ```bash
+   cp .env.example .env
+   # Edit .env and set ETHEREUM_RPC_URL
+   ```
+
+2. **Run simulation against current mainnet state:**
+   ```bash
+   npm run fork:simulate
+   ```
+
+3. **Run simulation at a specific block:**
+   ```bash
+   FORK_BLOCK_NUMBER=18500000 npm run fork:simulate
+   ```
+
+4. **Customize target pools:**
+   ```bash
+   TARGET_POOLS=WETH-USDC-0.05%,ETH-USDT-0.3% npm run fork:simulate
+   ```
+
+### Simulation Features
+
+- **Real Pool State**: Uses actual Uniswap V3 pool states from mainnet
+- **Multiple Swap Sizes**: Tests small (1 ETH), medium (10 ETH), and whale (100 ETH) swaps
+- **Gas Cost Analysis**: Includes real gas costs at current network prices
+- **Profit Calculation**: Accounts for LP fees, gas costs, and flash loan fees
+- **Comprehensive Reporting**: Generates JSON reports and console tables
+
+### Supported Pools
+
+The simulation targets high-volume Uniswap V3 pools:
+
+- **WETH/USDC 0.05%** (0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640)
+- **ETH/USDT 0.3%** (0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36)  
+- **WBTC/ETH 0.3%** (0xCBCdF9626bC03E24f779434178A73a0B4bad62eD)
+
+### Configuration Options
+
+Environment variables for fork simulation:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FORK_BLOCK_NUMBER` | Specific block to fork from | Latest |
+| `TARGET_POOLS` | Comma-separated list of pools | All configured pools |
+| `SIMULATION_GAS_PRICE_GWEI` | Gas price for simulations | 20 |
+| `SIMULATION_REPORT_DIR` | Directory for reports | ./reports |
+
+### Report Generation
+
+Simulations generate detailed reports in the `/reports` directory:
+
+- **JSON Reports**: Machine-readable with full simulation data
+- **Console Tables**: Human-readable summary tables
+- **Profit Analysis**: Net profit calculations in ETH and USD
+- **Gas Analysis**: Detailed gas usage and costs
+- **Success Metrics**: Profitability rates and optimal scenarios
+
+Example report structure:
+```json
+{
+  "metadata": {
+    "timestamp": "2024-01-01T00:00:00.000Z",
+    "totalSimulations": 9,
+    "profitableCount": 2
+  },
+  "summary": {
+    "totalProfitEth": "0.0408",
+    "averageGasUsed": 480000,
+    "bestPool": "WBTC-ETH-0.3%"
+  },
+  "results": [...]
+}
 ```
 
 ## 📊 Monitoring
@@ -267,9 +360,15 @@ jit-bot/
 │   ├── watcher/        # Mempool monitoring
 │   ├── bundler/        # Bundle construction
 │   ├── executor/       # Bundle execution
-│   └── metrics/        # Monitoring & metrics
+│   ├── metrics/        # Monitoring & metrics
+│   └── fork/           # Fork simulation environment
+│       ├── forkSimulator.ts    # Core simulation logic
+│       └── reportGenerator.ts  # Report generation
 ├── test/               # Test files
 ├── scripts/            # Deployment & utility scripts
+│   ├── forkSimulation.ts      # Main fork simulation runner
+│   └── startFork.ts           # Fork node launcher
+├── reports/            # Simulation reports (timestamped)
 ├── config.json         # Bot configuration
 └── docker-compose.yml  # Docker deployment
 ```
@@ -299,6 +398,10 @@ jit-bot/
 | `MIN_PROFIT_THRESHOLD` | Minimum profit in ETH | No | 0.01 |
 | `MAX_LOAN_SIZE` | Maximum flash loan size | No | 1000000 |
 | `METRICS_PORT` | Metrics server port | No | 3001 |
+| `FORK_BLOCK_NUMBER` | Block number for forking | No | Latest |
+| `TARGET_POOLS` | Pools for simulation | No | All configured |
+| `SIMULATION_GAS_PRICE_GWEI` | Gas price for simulations | No | 20 |
+| `SIMULATION_REPORT_DIR` | Reports directory | No | ./reports |
 
 ## 🤝 Contributing
 

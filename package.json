@@ -11,6 +11,8 @@
     "dev": "ts-node src/bot/index.ts",
     "deploy": "hardhat run scripts/deploy.ts",
     "simulate": "ts-node scripts/simulateExample.ts",
+    "fork": "ts-node scripts/startFork.ts",
+    "fork:simulate": "ts-node scripts/forkSimulation.ts",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix"
   },
