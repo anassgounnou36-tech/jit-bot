@@ -320,7 +320,7 @@ export class JitBot {
     }
   }
 
-  private isProfitable(simulationResult: any, swap: PendingSwap): boolean {
+  private isProfitable(simulationResult: any, _swap: PendingSwap): boolean {
     if (!simulationResult.profitable) {
       return false;
     }
