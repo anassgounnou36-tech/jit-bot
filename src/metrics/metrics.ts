@@ -35,6 +35,23 @@ export interface BotMetrics {
   liveExecutions: number;
   liveProfitUSD: number;
   gasEfficiency: number;
+
+  // Pool-level metrics
+  poolMetrics?: { [poolId: string]: PoolMetrics };
+}
+
+export interface PoolMetrics {
+  swapsDetected: number;
+  bundlesSubmitted: number;
+  bundlesIncluded: number;
+  successRate: number;
+  totalProfitETH: string;
+  totalProfitUSD: number;
+  totalGasSpent: string;
+  averageProfitPerBundle: string;
+  lastActivity: number;
+  failureCount: number;
+  enabled: boolean;
 }
 
 export interface SwapOpportunity {
@@ -63,6 +80,7 @@ export interface LiveExecutionMetrics {
 
 export class Metrics {
   private metrics: BotMetrics;
+  private poolMetrics: Map<string, PoolMetrics> = new Map();
   private opportunities: SwapOpportunity[] = [];
   private liveExecutions: LiveExecutionMetrics[] = [];
   private app: express.Application;
@@ -98,7 +116,8 @@ export class Metrics {
       networkErrors: 0,
       liveExecutions: 0,
       liveProfitUSD: 0,
-      gasEfficiency: 0
+      gasEfficiency: 0,
+      poolMetrics: {}
     };
 
     this.app = express();
@@ -480,12 +499,158 @@ jit_bot_gas_efficiency ${this.metrics.gasEfficiency}
 jit_bot_mode ${this.isLiveMode ? 1 : 0}`;
     }
 
+    // Add pool-level metrics
+    for (const [poolId, poolStats] of this.poolMetrics) {
+      const cleanPoolId = poolId.replace(/[^a-zA-Z0-9_]/g, '_');
+      metrics += `
+
+# HELP jit_bot_pool_swaps_detected_total Total swaps detected per pool
+# TYPE jit_bot_pool_swaps_detected_total counter
+jit_bot_pool_swaps_detected_total{pool="${cleanPoolId}"} ${poolStats.swapsDetected}
+
+# HELP jit_bot_pool_bundles_submitted_total Total bundles submitted per pool
+# TYPE jit_bot_pool_bundles_submitted_total counter
+jit_bot_pool_bundles_submitted_total{pool="${cleanPoolId}"} ${poolStats.bundlesSubmitted}
+
+# HELP jit_bot_pool_bundles_included_total Total bundles included per pool
+# TYPE jit_bot_pool_bundles_included_total counter
+jit_bot_pool_bundles_included_total{pool="${cleanPoolId}"} ${poolStats.bundlesIncluded}
+
+# HELP jit_bot_pool_success_rate Success rate per pool
+# TYPE jit_bot_pool_success_rate gauge
+jit_bot_pool_success_rate{pool="${cleanPoolId}"} ${poolStats.successRate}
+
+# HELP jit_bot_pool_profit_eth Total profit in ETH per pool
+# TYPE jit_bot_pool_profit_eth gauge
+jit_bot_pool_profit_eth{pool="${cleanPoolId}"} ${ethers.utils.formatEther(poolStats.totalProfitETH)}
+
+# HELP jit_bot_pool_profit_usd Total profit in USD per pool
+# TYPE jit_bot_pool_profit_usd gauge
+jit_bot_pool_profit_usd{pool="${cleanPoolId}"} ${poolStats.totalProfitUSD}
+
+# HELP jit_bot_pool_gas_spent_eth Total gas spent in ETH per pool
+# TYPE jit_bot_pool_gas_spent_eth gauge
+jit_bot_pool_gas_spent_eth{pool="${cleanPoolId}"} ${ethers.utils.formatEther(poolStats.totalGasSpent)}
+
+# HELP jit_bot_pool_failure_count Current failure count per pool
+# TYPE jit_bot_pool_failure_count gauge
+jit_bot_pool_failure_count{pool="${cleanPoolId}"} ${poolStats.failureCount}
+
+# HELP jit_bot_pool_enabled Pool enabled status (1=enabled, 0=disabled)
+# TYPE jit_bot_pool_enabled gauge
+jit_bot_pool_enabled{pool="${cleanPoolId}"} ${poolStats.enabled ? 1 : 0}`;
+    }
+
     return metrics.trim();
+  }
+
+  // Pool-specific metrics methods
+  initializePool(poolId: string): void {
+    if (!this.poolMetrics.has(poolId)) {
+      this.poolMetrics.set(poolId, {
+        swapsDetected: 0,
+        bundlesSubmitted: 0,
+        bundlesIncluded: 0,
+        successRate: 0,
+        totalProfitETH: '0',
+        totalProfitUSD: 0,
+        totalGasSpent: '0',
+        averageProfitPerBundle: '0',
+        lastActivity: Date.now(),
+        failureCount: 0,
+        enabled: true
+      });
+    }
+  }
+
+  recordPoolSwapDetected(poolId: string, opportunity: SwapOpportunity): void {
+    this.initializePool(poolId);
+    const poolStats = this.poolMetrics.get(poolId)!;
+    
+    poolStats.swapsDetected++;
+    poolStats.lastActivity = Date.now();
+    
+    // Update global metrics
+    this.recordSwapDetected(opportunity);
+  }
+
+  recordPoolBundleSubmitted(poolId: string, bundleData: string): void {
+    this.initializePool(poolId);
+    const poolStats = this.poolMetrics.get(poolId)!;
+    
+    poolStats.bundlesSubmitted++;
+    poolStats.lastActivity = Date.now();
+    
+    // Update global metrics
+    this.recordBundleSubmitted(bundleData);
+  }
+
+  recordPoolBundleIncluded(poolId: string, profitETH: string, gasSpent: string, profitUSD: number = 0): void {
+    this.initializePool(poolId);
+    const poolStats = this.poolMetrics.get(poolId)!;
+    
+    poolStats.bundlesIncluded++;
+    poolStats.lastActivity = Date.now();
+    
+    // Update pool profit
+    const currentProfitETH = ethers.BigNumber.from(poolStats.totalProfitETH || '0');
+    const newProfitETH = currentProfitETH.add(profitETH);
+    poolStats.totalProfitETH = newProfitETH.toString();
+    poolStats.totalProfitUSD += profitUSD;
+    
+    // Update gas spent
+    const currentGasSpent = ethers.BigNumber.from(poolStats.totalGasSpent || '0');
+    const newGasSpent = currentGasSpent.add(gasSpent);
+    poolStats.totalGasSpent = newGasSpent.toString();
+    
+    // Calculate success rate and average profit
+    poolStats.successRate = poolStats.bundlesIncluded / Math.max(poolStats.bundlesSubmitted, 1);
+    poolStats.averageProfitPerBundle = poolStats.bundlesIncluded > 0 
+      ? ethers.utils.formatEther(newProfitETH.div(poolStats.bundlesIncluded))
+      : '0';
+    
+    // Reset failure count on success
+    poolStats.failureCount = 0;
+    
+    // Update global metrics
+    this.recordBundleIncluded(`pool_${poolId}_bundle`, ethers.BigNumber.from(profitETH), ethers.BigNumber.from(gasSpent));
+  }
+
+  recordPoolFailure(poolId: string, error: string): void {
+    this.initializePool(poolId);
+    const poolStats = this.poolMetrics.get(poolId)!;
+    
+    poolStats.failureCount++;
+    poolStats.lastActivity = Date.now();
+    
+    // Update global metrics
+    this.recordExecutionError(`Pool ${poolId}: ${error}`);
+  }
+
+  disablePool(poolId: string): void {
+    this.initializePool(poolId);
+    const poolStats = this.poolMetrics.get(poolId)!;
+    poolStats.enabled = false;
+  }
+
+  enablePool(poolId: string): void {
+    this.initializePool(poolId);
+    const poolStats = this.poolMetrics.get(poolId)!;
+    poolStats.enabled = true;
+    poolStats.failureCount = 0;
   }
 
   // Utility method to get current metrics
   getMetrics(): BotMetrics {
     this.updateCalculatedMetrics();
+    
+    // Update pool metrics in the main metrics object
+    const poolMetricsObj: { [poolId: string]: PoolMetrics } = {};
+    for (const [poolId, metrics] of this.poolMetrics) {
+      poolMetricsObj[poolId] = { ...metrics };
+    }
+    this.metrics.poolMetrics = poolMetricsObj;
+    
     return { ...this.metrics };
   }
 

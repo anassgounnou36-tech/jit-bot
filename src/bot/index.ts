@@ -4,6 +4,7 @@ import { Simulator, JitParameters } from '../watcher/simulator';
 import { BundleBuilder } from '../bundler/bundleBuilder';
 import { Executor } from '../executor/executor';
 import { Metrics, SwapOpportunity } from '../metrics/metrics';
+import { PoolCoordinator } from '../coordinator/poolCoordinator';
 import config from '../../config.json';
 import * as dotenv from 'dotenv';
 
@@ -16,11 +17,13 @@ export interface BotConfig {
   maxGasGwei: number;
   retryAttempts: number;
   retryDelayMs: number;
+  useMultiPool: boolean;
 }
 
 export class JitBot {
   private provider: ethers.providers.JsonRpcProvider;
-  private mempoolWatcher: MempoolWatcher;
+  private mempoolWatcher: MempoolWatcher | null = null; // For single-pool mode
+  private poolCoordinator: PoolCoordinator | null = null; // For multi-pool mode
   private simulator: Simulator;
   private bundleBuilder: BundleBuilder;
   private executor: Executor;
@@ -41,18 +44,19 @@ export class JitBot {
       profitThresholdUSD: parseFloat(process.env.PROFIT_THRESHOLD_USD || '10.0'),
       maxGasGwei: parseFloat(process.env.MAX_GAS_GWEI || '100'),
       retryAttempts: 3,
-      retryDelayMs: 1000
+      retryDelayMs: 1000,
+      useMultiPool: process.env.ENABLE_MULTI_POOL === 'true' || process.env.POOL_IDS !== undefined
     };
 
     console.log(`🤖 Starting JIT Bot in ${this.config.mode.toUpperCase()} mode`);
     console.log(`🌐 Target network: ${this.config.network}`);
+    console.log(`🔄 Multi-pool mode: ${this.config.useMultiPool ? 'ENABLED' : 'DISABLED'}`);
 
     // Initialize provider
     const rpcUrl = process.env.ETHEREUM_RPC_URL || config.rpc.ethereum;
     this.provider = new ethers.providers.JsonRpcProvider(rpcUrl.replace('wss://', 'https://'));
     
     // Initialize components
-    this.mempoolWatcher = new MempoolWatcher(config.rpc.ethereum);
     this.simulator = new Simulator(rpcUrl.replace('wss://', 'https://'));
     
     if (!process.env.PRIVATE_KEY) {
@@ -69,15 +73,31 @@ export class JitBot {
     if (this.config.mode === 'live' && this.contractAddress === '0x0000000000000000000000000000000000000000') {
       throw new Error('JIT_CONTRACT_ADDRESS must be set for live mode');
     }
+
+    // Initialize either multi-pool coordinator or single watcher
+    if (this.config.useMultiPool) {
+      this.poolCoordinator = new PoolCoordinator(
+        this.provider,
+        this.simulator,
+        this.bundleBuilder,
+        this.executor,
+        this.metrics,
+        this.contractAddress
+      );
+    } else {
+      this.mempoolWatcher = new MempoolWatcher(config.rpc.ethereum);
+    }
     
     this.setupEventHandlers();
   }
 
   private setupEventHandlers(): void {
-    // Handle detected swaps
-    this.mempoolWatcher.on('swapDetected', async (swap: PendingSwap) => {
-      await this.handleSwapDetected(swap);
-    });
+    // Handle detected swaps (only for single-pool mode)
+    if (this.mempoolWatcher) {
+      this.mempoolWatcher.on('swapDetected', async (swap: PendingSwap) => {
+        await this.handleSwapDetected(swap);
+      });
+    }
 
     // Handle process termination
     process.on('SIGINT', () => {
@@ -135,8 +155,12 @@ export class JitBot {
         await this.performLiveModeChecks();
       }
 
-      // Start mempool watcher
-      await this.mempoolWatcher.start();
+      // Start either pool coordinator or mempool watcher
+      if (this.config.useMultiPool && this.poolCoordinator) {
+        await this.poolCoordinator.start();
+      } else if (this.mempoolWatcher) {
+        await this.mempoolWatcher.start();
+      }
 
       this.isRunning = true;
       console.log(`✅ JIT Bot started successfully in ${this.config.mode} mode`);
@@ -161,7 +185,12 @@ export class JitBot {
 
     try {
       // Stop components
-      await this.mempoolWatcher.stop();
+      if (this.config.useMultiPool && this.poolCoordinator) {
+        await this.poolCoordinator.stop();
+      } else if (this.mempoolWatcher) {
+        await this.mempoolWatcher.stop();
+      }
+      
       this.metrics.stop();
 
       this.isRunning = false;
@@ -437,7 +466,7 @@ export class JitBot {
 
   // Public method to get bot status
   getStatus(): any {
-    return {
+    const baseStatus = {
       isRunning: this.isRunning,
       mode: this.config.mode,
       network: this.config.network,
@@ -449,6 +478,25 @@ export class JitBot {
         maxLoanSize: config.maxLoanSize,
         tickRangeWidth: config.tickRangeWidth,
         targets: config.targets.length
+      }
+    };
+
+    // Add pool coordinator status if in multi-pool mode
+    if (this.config.useMultiPool && this.poolCoordinator) {
+      return {
+        ...baseStatus,
+        multiPool: {
+          enabled: true,
+          pools: this.poolCoordinator.getPoolStatus(),
+          currentOpportunities: this.poolCoordinator.getCurrentOpportunities()
+        }
+      };
+    }
+
+    return {
+      ...baseStatus,
+      multiPool: {
+        enabled: false
       }
     };
   }

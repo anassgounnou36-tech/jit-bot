@@ -136,13 +136,23 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   private findTargetPool(tokenIn: string, tokenOut: string, fee: number): any {
+    // Support pool filtering if pools are specified
+    const allowedPoolIds = process.env.POOL_IDS?.split(',') || [];
+    
     return config.targets.find(target => {
-      return target.fee === fee && (
+      const isMatchingTokensAndFee = target.fee === fee && (
         (target.token0.toLowerCase() === tokenIn.toLowerCase() && 
          target.token1.toLowerCase() === tokenOut.toLowerCase()) ||
         (target.token1.toLowerCase() === tokenIn.toLowerCase() && 
          target.token0.toLowerCase() === tokenOut.toLowerCase())
       );
+      
+      // If pool filtering is enabled, check if this pool is allowed
+      if (allowedPoolIds.length > 0) {
+        return isMatchingTokensAndFee && allowedPoolIds.includes(target.pool);
+      }
+      
+      return isMatchingTokensAndFee;
     });
   }
 
