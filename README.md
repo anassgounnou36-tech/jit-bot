@@ -28,6 +28,7 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
 - [Monitoring](#monitoring)
 - [Risk Management](#risk-management)
 - [Development](#development)
+- [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 
 ## 🏗️ Architecture
@@ -743,6 +744,64 @@ jit-bot/
 | `TARGET_POOLS` | Pools for simulation | No | All configured |
 | `SIMULATION_GAS_PRICE_GWEI` | Gas price for simulations | No | 20 |
 | `SIMULATION_REPORT_DIR` | Reports directory | No | ./reports |
+
+## 🔧 Troubleshooting
+
+### Fixing npm ERESOLVE on install (ethers v5)
+
+This project uses **ethers v5** for compatibility reasons. If you encounter `ERESOLVE` peer dependency conflicts during `npm install`, follow these steps:
+
+#### Windows Commands
+```cmd
+# Clean installation
+rmdir /s /q node_modules
+del package-lock.json
+npm install
+```
+
+#### Linux/macOS Commands
+```bash
+# Clean installation
+rm -rf node_modules package-lock.json
+npm install
+```
+
+#### Understanding the Issue
+
+The project maintains compatibility with **ethers v5** while many newer Hardhat plugins require **ethers v6**. This creates peer dependency conflicts.
+
+**Our Solution:**
+- Uses `@nomiclabs/hardhat-ethers@^2.2.3` (supports ethers v5)
+- Instead of `@nomicfoundation/hardhat-ethers@^3.x` (requires ethers v6)
+- Pins `ethers@^5.7.2` for stability
+- Uses `@typechain/ethers-v5@^10.2.1` for proper TypeScript support
+
+#### Last Resort Option
+
+If you still encounter issues, you can use the legacy peer deps resolver (not recommended):
+```bash
+npm install --legacy-peer-deps
+```
+
+**Note:** Only use `--legacy-peer-deps` if the above clean installation doesn't work, as it may lead to unexpected behavior.
+
+#### Verification
+
+After installation, verify everything works:
+```bash
+# Check versions
+npm ls ethers @nomiclabs/hardhat-ethers
+
+# Test compilation (requires internet for Solidity compiler download)
+npm run build
+
+# Test TypeScript compilation
+npx tsc --noEmit
+```
+
+Expected output should show:
+- `ethers@5.x.x`
+- `@nomiclabs/hardhat-ethers@2.x.x`
 
 ## 🤝 Contributing
 
