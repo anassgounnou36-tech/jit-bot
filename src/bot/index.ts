@@ -286,7 +286,7 @@ export class JitBot {
       try {
         const blockNumber = await this.httpProvider.getBlockNumber();
         logger.info('HTTP RPC connected', { 
-          endpoint: this.appConfig.rpcUrlHttp.replace(/\/[^\/]*$/, '/***'),
+          endpoint: this.appConfig.rpcUrlHttp.replace(/\/[^/]*$/, '/***'),
           blockNumber,
         });
         prometheusMetrics.recordRpcRequest('getBlockNumber', 'success', 0.1);
@@ -300,7 +300,7 @@ export class JitBot {
         try {
           await this.wsProvider.getBlockNumber();
           logger.info('WebSocket RPC connected', {
-            endpoint: this.appConfig.rpcUrlWs.replace(/\/[^\/]*$/, '/***'),
+            endpoint: this.appConfig.rpcUrlWs.replace(/\/[^/]*$/, '/***'),
           });
         } catch (error: any) {
           logger.warn('WebSocket RPC connection failed', { error: error.message });

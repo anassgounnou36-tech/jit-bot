@@ -2,6 +2,116 @@
 
 A production-ready Just-In-Time (JIT) liquidity provision bot that automatically detects large pending swaps and provides concentrated liquidity to capture fees. Supports both simulation and live mainnet execution modes.
 
+## 🛡️ Security
+
+### Environment Configuration
+
+This project uses environment variables for configuration. **Never commit sensitive data to the repository.**
+
+#### Setting up Environment Variables
+
+1. **Copy the example file:**
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Edit `.env` with your values:**
+   ```bash
+   # Required for simulation mode
+   RPC_URL_HTTP=https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY
+   RPC_URL_WS=wss://eth-mainnet.ws.alchemyapi.io/v2/YOUR_KEY
+   
+   # Placeholders for PR2+ (NOT USED in PR1)
+   PRIVATE_KEY=0x...
+   FLASHBOTS_PRIVATE_KEY=0x...
+   ```
+
+3. **Verify `.env` is in `.gitignore`:**
+   ```bash
+   echo ".env" >> .gitignore
+   ```
+
+#### Security Best Practices
+
+- **Never share your private keys** or commit them to version control
+- **Use strong RPC endpoints** with rate limiting and authentication
+- **Regularly rotate API keys** for external services
+- **Monitor wallet balances** and set up alerts for unusual activity
+- **Use hardware wallets** for high-value accounts when possible
+
+### Simulation Mode (PR1)
+
+**PR1 is SIMULATION-ONLY** for safety. Live execution is completely disabled.
+
+#### Safety Features
+
+- ✅ **Forced simulation mode** - Live execution is impossible in PR1
+- ✅ **Production mode blocked** - Throws error if `NODE_ENV=production` and `SIMULATION_MODE=false`
+- ✅ **No bundle submission** - Flashbots integration is placeholder-only
+- ✅ **No private key usage** - Wallet operations are mocked
+- ✅ **Comprehensive validation** - Multiple safety checks prevent accidents
+
+#### Quick Start for Simulation
+
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Set up environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your RPC URLs
+   ```
+
+3. **Start simulation mode:**
+   ```bash
+   npm run dev
+   ```
+
+4. **View metrics:**
+   ```bash
+   # Open in browser: http://localhost:9090/metrics
+   # Health check: http://localhost:9090/health
+   ```
+
+#### Simulation Features
+
+- **Real pool state monitoring** using live on-chain data
+- **Accurate LP math** with Uniswap V3 tick calculations
+- **Gas estimation** with price capping and historical tracking
+- **Price oracle integration** with Chainlink feeds and fallbacks
+- **Prometheus metrics** for monitoring and analysis
+- **Structured logging** with trace IDs for debugging
+
+### Live Execution (PR2+)
+
+⚠️ **Live execution is NOT available in PR1** and will be introduced in PR2.
+
+When live execution becomes available:
+
+#### Required Security Measures
+
+- **Secure key management** - Use environment variables or hardware wallets
+- **Flashbots integration** - MEV protection with proper signing keys
+- **Balance monitoring** - Automated alerts for balance changes
+- **Gas price limits** - Protection against extreme gas costs
+- **Profit thresholds** - Minimum profit requirements
+- **Emergency controls** - Kill switches and pause functionality
+
+#### Risk Disclosure
+
+⚠️ **WARNING**: Live execution involves significant financial risks:
+
+- **Smart contract risks** - Code bugs or vulnerabilities
+- **Market risks** - Price volatility and slippage
+- **MEV competition** - Front-running and sandwich attacks
+- **Gas cost volatility** - Network congestion and fee spikes
+- **Regulatory risks** - Changing legal landscape
+- **Technical risks** - Node failures and connectivity issues
+
+**Only use funds you can afford to lose and thoroughly understand the risks involved.**
+
 ## 🚀 Features
 
 - **Multi-Pool Monitoring**: Concurrent monitoring of multiple Uniswap V3 pools with opportunity ranking

@@ -197,18 +197,18 @@ export class PerformanceLogger {
     operation: string,
     fn: (perf: PerformanceLogger) => Promise<T>
   ): Promise<T> {
-    return new Promise(async (resolve, reject) => {
-      const perf = new PerformanceLogger(logger, operation);
-      
-      try {
-        const result = await fn(perf);
+    const perf = new PerformanceLogger(logger, operation);
+    
+    return fn(perf).then(
+      (result) => {
         perf.finish(true);
-        resolve(result);
-      } catch (error: any) {
+        return result;
+      },
+      (error: any) => {
         perf.finish(false, { error: error.message });
-        reject(error);
+        throw error;
       }
-    });
+    );
   }
 }
 

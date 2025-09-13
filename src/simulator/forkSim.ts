@@ -203,7 +203,7 @@ export class ForkSimulator {
     const currentTick = poolState.tick;
     const halfRange = Math.floor(rangeWidth / 2);
     
-    let tickLower = Math.floor((currentTick - halfRange) / tickSpacing) * tickSpacing;
+    const tickLower = Math.floor((currentTick - halfRange) / tickSpacing) * tickSpacing;
     let tickUpper = Math.ceil((currentTick + halfRange) / tickSpacing) * tickSpacing;
     
     // Ensure valid range

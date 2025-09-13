@@ -44,7 +44,7 @@ export function getTickAtSqrtRatio(sqrtPriceX96: BigNumber): number {
     throw new Error('R');
   }
 
-  let ratio = sqrtPriceX96.shl(32);
+  const ratio = sqrtPriceX96.shl(32);
   
   let r = ratio;
   let msb = 0;

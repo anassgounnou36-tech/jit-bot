@@ -53,7 +53,7 @@ export class StateFetcher {
 
   constructor(httpRpcUrl: string) {
     this.provider = new ethers.providers.JsonRpcProvider(httpRpcUrl);
-    logger.info('StateFetcher initialized', { httpRpcUrl: httpRpcUrl.replace(/\/[^\/]*$/, '/***') });
+    logger.info('StateFetcher initialized', { httpRpcUrl: httpRpcUrl.replace(/\/[^/]*$/, '/***') });
   }
 
   /**
