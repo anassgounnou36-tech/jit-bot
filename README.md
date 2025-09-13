@@ -2,6 +2,62 @@
 
 A production-ready Just-In-Time (JIT) liquidity provision bot that automatically detects large pending swaps and provides concentrated liquidity to capture fees. Supports both simulation and live mainnet execution modes.
 
+## 🚨 Security Notice
+
+**IMPORTANT: This release (PR1) is SIMULATION-ONLY for safety.**
+
+- **Never commit private keys** to version control
+- **Always use `.env` files** for sensitive configuration
+- **Keep simulation mode enabled** (`SIMULATION_MODE=true`) until thoroughly tested
+- **Use separate wallets** for testing and production
+- **Monitor gas costs** carefully in live mode
+
+### Secrets Management
+
+1. **Copy the environment template:**
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Edit `.env` with your secrets** (never commit this file):
+   - `PRIVATE_KEY`: Your wallet private key (with 0x prefix)
+   - `RPC_URL_HTTP`: Your HTTP RPC endpoint
+   - `RPC_URL_WS`: Your WebSocket RPC endpoint
+   - `FLASHBOTS_PRIVATE_KEY`: Separate key for Flashbots (optional)
+
+3. **Verify `.env` is in `.gitignore`** to prevent accidental commits
+
+## 🎮 Simulation Quickstart
+
+Get started with risk-free simulation in 3 minutes:
+
+```bash
+# 1. Clone and install dependencies
+git clone https://github.com/anassgounnou36-tech/jit-bot.git
+cd jit-bot
+npm install
+
+# 2. Set up environment (simulation mode)
+cp .env.example .env
+# Edit .env and set your RPC_URL_HTTP and RPC_URL_WS
+
+# 3. Run fork simulation
+npm run fork:simulate
+
+# 4. Start the bot in simulation mode
+npm run dev
+```
+
+**Simulation Features:**
+- ✅ **No real transactions** - completely safe testing
+- ✅ **Real market data** - uses actual pool states and prices
+- ✅ **Profit estimation** - calculates potential returns
+- ✅ **Gas cost analysis** - includes realistic gas calculations
+- ✅ **Multi-pool support** - test different pool strategies
+- ✅ **Live metrics** - Prometheus metrics available at http://localhost:9090/metrics
+
+**Note:** In PR1, all execution paths that would send real transactions are blocked. This ensures safe testing while validating the strategy logic.
+
 ## 🚀 Features
 
 - **Multi-Pool Monitoring**: Concurrent monitoring of multiple Uniswap V3 pools with opportunity ranking

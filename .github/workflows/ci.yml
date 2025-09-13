@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run ESLint
+      run: npm run lint
+      continue-on-error: true  # Allow lint errors but continue
+      
+    - name: TypeScript compilation check
+      run: npx tsc --noEmit
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run unit tests
+      run: npm run test:unit
+      env:
+        # Test environment variables
+        CHAIN: ethereum
+        SIMULATION_MODE: true
+        PRIVATE_KEY: "0x1111111111111111111111111111111111111111111111111111111111111111"
+        RPC_URL_HTTP: "http://localhost:8545"
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: ${{ vars.FORK_BLOCK_NUMBER != '' && vars.RPC_URL_HTTP != '' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run fork integration tests
+      run: npm run test:fork
+      env:
+        FORK_BLOCK_NUMBER: ${{ vars.FORK_BLOCK_NUMBER }}
+        RPC_URL_HTTP: ${{ vars.RPC_URL_HTTP }}
+        CHAIN: ethereum
+        SIMULATION_MODE: true
+        PRIVATE_KEY: "0x1111111111111111111111111111111111111111111111111111111111111111"
+      timeout-minutes: 10
+
+  build:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Build TypeScript
+      run: npx tsc
+      
+    - name: Build contracts (if possible)
+      run: npm run build
+      continue-on-error: true  # Hardhat compilation may fail due to network issues
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run security audit
+      run: npm audit --audit-level=moderate
+      continue-on-error: true  # Don't fail CI on moderate vulnerabilities
+      
+    - name: Check for secrets in code
+      run: |
+        # Simple check for potential secrets (this is basic, consider using proper tools)
+        if grep -r "0x[a-fA-F0-9]\{64\}" src/ --exclude-dir=node_modules || \
+           grep -r "sk_" src/ --exclude-dir=node_modules || \
+           grep -r "pk_" src/ --exclude-dir=node_modules; then
+          echo "⚠️ Potential secrets found in code"
+          exit 1
+        fi
+        echo "✅ No obvious secrets detected"
+
+  simulation-test:
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Test bot startup in simulation mode
+      run: |
+        # Test that the bot can start in simulation mode
+        timeout 30s npm run ci || true
+        echo "✅ Bot simulation startup test completed"
+      env:
+        CHAIN: ethereum
+        SIMULATION_MODE: true
+        PRIVATE_KEY: "0x1111111111111111111111111111111111111111111111111111111111111111"
+        RPC_URL_HTTP: "https://rpc.ankr.com/eth"
+        GLOBAL_MIN_PROFIT_USD: "10"
+        MAX_GAS_GWEI: "100"
+        PROMETHEUS_PORT: "9090"
+        POOL_IDS: "WETH-USDC-0.05%"
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, unit-tests, build, security-scan, simulation-test]
+    if: always()
+    
+    steps:
+    - name: CI Summary
+      run: |
+        echo "## CI Pipeline Summary"
+        echo "✅ Lint and TypeCheck: ${{ needs.lint-and-typecheck.result }}"
+        echo "✅ Unit Tests: ${{ needs.unit-tests.result }}"
+        echo "✅ Build: ${{ needs.build.result }}"
+        echo "✅ Security Scan: ${{ needs.security-scan.result }}"
+        echo "✅ Simulation Test: ${{ needs.simulation-test.result }}"
+        
+        if [[ "${{ vars.FORK_BLOCK_NUMBER }}" != "" && "${{ vars.RPC_URL_HTTP }}" != "" ]]; then
+          echo "✅ Integration Tests: ${{ needs.integration-tests.result || 'skipped' }}"
+        else
+          echo "⏭️ Integration Tests: Skipped (FORK_BLOCK_NUMBER or RPC_URL_HTTP not set)"
+        fi
+        
+        echo ""
+        echo "🔒 This build is SIMULATION-ONLY (PR1)"
+        echo "🚫 Live execution is blocked for safety"

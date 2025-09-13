@@ -25,7 +25,14 @@
     "resolveJsonModule": true
   },
   "include": [
-    "./src/**/*"
+    "./src/**/*",
+    "./test/**/*"
   ],
-  "exclude": ["node_modules", "dist", "cache", "artifacts", "typechain-types"]
+  "exclude": ["node_modules", "dist", "cache", "artifacts", "typechain-types", "test/old"],
+  "ts-node": {
+    "esm": false,
+    "compilerOptions": {
+      "module": "commonjs"
+    }
+  }
 }
