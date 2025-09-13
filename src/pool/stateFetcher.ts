@@ -240,23 +240,25 @@ export function isPoolStateFresh(poolState: PoolState, maxAgeMs: number = CACHE_
  */
 export function getCurrentPrice(poolState: PoolState): number {
   // Uniswap V3 price formula: price = (sqrtPriceX96^2 / 2^192) * 10^(decimals0 - decimals1)
-  const Q96 = ethers.BigNumber.from('79228162514264337593543950336'); // 2^96
   const sqrtPrice = poolState.sqrtPriceX96;
   
-  // Calculate price with proper decimal handling
-  // price = (sqrtPriceX96^2 / 2^192)
-  const priceX192 = sqrtPrice.mul(sqrtPrice);
-  const priceBase = priceX192.div(Q96).div(Q96);
-  
-  // Convert to float for decimal adjustment
-  const priceFloat = parseFloat(ethers.utils.formatEther(priceBase.mul(ethers.constants.WeiPerEther)));
-  
-  // Adjust for token decimals: multiply by 10^(decimals0 - decimals1)
+  // Handle decimal adjustment
   const decimals0 = poolState.decimals0 || 18;
   const decimals1 = poolState.decimals1 || 18;
-  const decimalAdjustment = Math.pow(10, decimals0 - decimals1);
+  const decimalDiff = decimals0 - decimals1;
   
-  return priceFloat * decimalAdjustment;
+  // Use JavaScript's Math for the calculation to avoid BigNumber precision loss
+  // Convert sqrtPriceX96 to a number (safe for this calculation)
+  const sqrtPriceFloat = parseFloat(sqrtPrice.toString());
+  
+  // Calculate: (sqrtPriceX96 / 2^96)^2 * 10^(decimals0 - decimals1)
+  const Q96_FLOAT = Math.pow(2, 96);
+  const priceBase = Math.pow(sqrtPriceFloat / Q96_FLOAT, 2);
+  
+  // Apply decimal adjustment
+  const decimalAdjustment = Math.pow(10, decimalDiff);
+  
+  return priceBase * decimalAdjustment;
 }
 
 /**
