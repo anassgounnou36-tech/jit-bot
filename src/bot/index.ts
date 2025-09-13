@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import { getConfig, getHttpProvider, getWsProvider, getWallet, validateNoLiveExecution } from '../config';
 import { initializeLogger, getLogger, createCandidateLogger, logJitOpportunity, logStartupConfiguration, logShutdown, flushLogs } from '../logging/logger';
 import { initializeMetrics } from '../metrics/prom';
-import { getMultiplePoolStates } from '../pool/stateFetcher';
+import { getMultiplePoolStates, getCurrentPrice } from '../pool/stateFetcher';
 import { fastSimulate, quickProfitabilityCheck } from '../simulator/fastSim';
 import { validateJitStrategy } from '../simulator/forkSim';
 import { getGasPriceGwei, checkGasPrice } from '../util/gasEstimator';
@@ -236,6 +236,17 @@ export class JitBot {
         // Update pool metrics
         const liquidityFloat = parseFloat(ethers.utils.formatEther(state.liquidity));
         this.metrics.updatePoolLiquidity(pool.address, pool.symbol0, pool.symbol1, liquidityFloat);
+        
+        // Update pool price using Uniswap V3 formula
+        const currentPrice = getCurrentPrice(state);
+        this.metrics.updatePoolPrice(pool.address, pool.symbol0, pool.symbol1, currentPrice);
+        
+        this.logger.debug({
+          msg: 'Pool metrics updated',
+          pool: pool.pool,
+          price: currentPrice,
+          liquidity: liquidityFloat
+        });
       } else {
         this.logger.warn({
           msg: 'Pool validation failed',
@@ -359,7 +370,10 @@ export class JitBot {
       // Update gas price metric
       this.metrics.updateGasPrice(gasCheck.currentGwei);
 
-      // Step 3: Detailed simulation
+      // Step 3: Record attempt and perform detailed simulation
+      // Increment jit_attempt_total when candidate is queued for fastSim
+      this.metrics.incrementJitAttempt(swap.pool);
+      
       const fastResult = await fastSimulate({
         poolAddress: swap.pool,
         swapAmountIn: ethers.BigNumber.from(swap.amountIn),
@@ -426,7 +440,8 @@ export class JitBot {
       // This is where execution would happen in PR2
       validateNoLiveExecution('JIT bundle execution');
 
-      this.metrics.recordJitAttempt(swap.pool, 'blocked_pr1');
+      // Record as blocked live execution failure
+      this.metrics.recordJitFailure(swap.pool, 'blocked_live_execution');
 
     } catch (error: any) {
       opportunity.stage = 'failed';

@@ -271,6 +271,29 @@ jit_bot_pool_failure_count{pool="ETH_USDT_0_3_"} 0
 jit_bot_pool_enabled{pool="WBTC_ETH_0_3_"} 1
 ```
 
+### Simulation Mode Metrics
+
+In simulation mode (PR1), expect the following metric behavior:
+
+```bash
+# Core opportunity tracking
+opportunities_detected_total{pool="0x88e6..."} 15    # Increments on swap detection
+jit_attempt_total{pool="0x88e6...",result="queued"} 12  # Attempts queued for simulation
+jit_failure_total{pool="0x88e6...",error_type="blocked_live_execution"} 8  # Blocked executions
+
+# Pool state metrics (updated from on-chain data)
+pool_price{pool="0x88e6...",token0="WETH",token1="USDC"} 3247.82  # Real-time pool price
+pool_liquidity{pool="0x88e6...",token0="WETH",token1="USDC"} 24500000  # Active liquidity
+
+# Simulation results (updated after each fastSim)
+current_simulated_profit_usd{pool="0x88e6..."} 45.23  # Latest simulation result
+
+# Gas tracking (single source of truth from gasEstimator)
+gas_price_gwei 25.4  # Current network gas price, capped by MAX_GAS_GWEI
+```
+
+**Note:** In simulation mode, all `jit_failure_total` with `error_type="blocked_live_execution"` is expected as live execution is disabled for safety.
+
 ## 🚀 Deployment
 
 1. **Deploy contracts**
@@ -716,7 +739,10 @@ Only use funds you can afford to lose and understand the risks involved.
 
 ### Running Tests
 ```bash
-# Unit tests
+# Unit tests (TypeScript - compatible with Node 20+)
+npm run test:unit
+
+# All tests (unit + integration)
 npm test
 
 # Coverage report
@@ -724,6 +750,9 @@ npm run test:coverage
 
 # Mainnet fork tests
 npm run test:fork
+
+# CI pipeline (lint + unit tests)
+npm run ci
 ```
 
 ### Simulation Scripts

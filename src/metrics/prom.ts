@@ -225,6 +225,10 @@ export class PrometheusMetrics {
     jitAttemptTotal.inc({ pool, result });
   }
 
+  public incrementJitAttempt(pool: string): void {
+    jitAttemptTotal.inc({ pool, result: 'queued' });
+  }
+
   public recordJitSuccess(pool: string): void {
     jitSuccessTotal.inc({ pool });
   }

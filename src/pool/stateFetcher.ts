@@ -12,6 +12,8 @@ export interface PoolState {
   tickSpacing: number;
   token0: string;
   token1: string;
+  decimals0?: number; // Token0 decimals for price calculation
+  decimals1?: number; // Token1 decimals for price calculation
   unlocked: boolean;
   timestamp: number; // Cache timestamp
 }
@@ -26,6 +28,10 @@ export interface LiquidityEstimate {
 const CACHE_TTL_MS = 1000; // 1 second TTL as specified
 const poolStateCache = new Map<string, PoolState>();
 
+// Cache for token decimals (longer TTL since decimals don't change)
+const TOKEN_DECIMALS_CACHE_TTL_MS = 3600000; // 1 hour
+const tokenDecimalsCache = new Map<string, { decimals: number; timestamp: number }>();
+
 // Uniswap V3 Pool ABI - minimal interface for state fetching
 const POOL_ABI = [
   'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
@@ -37,6 +43,45 @@ const POOL_ABI = [
   'function feeGrowthGlobal0X128() external view returns (uint256)',
   'function feeGrowthGlobal1X128() external view returns (uint256)'
 ];
+
+// ERC20 ABI for token decimals
+const ERC20_ABI = [
+  'function decimals() external view returns (uint8)'
+];
+
+/**
+ * Get token decimals with caching
+ * @param tokenAddress Token contract address
+ * @returns Token decimals
+ */
+async function getTokenDecimals(tokenAddress: string): Promise<number> {
+  const normalizedAddress = ethers.utils.getAddress(tokenAddress);
+  
+  // Check cache first
+  const cached = tokenDecimalsCache.get(normalizedAddress);
+  if (cached && (Date.now() - cached.timestamp) < TOKEN_DECIMALS_CACHE_TTL_MS) {
+    return cached.decimals;
+  }
+  
+  const config = getConfig();
+  const provider = getHttpProvider(config);
+  const tokenContract = new ethers.Contract(normalizedAddress, ERC20_ABI, provider);
+  
+  try {
+    const decimals = await tokenContract.decimals();
+    
+    // Cache the result
+    tokenDecimalsCache.set(normalizedAddress, {
+      decimals,
+      timestamp: Date.now()
+    });
+    
+    return decimals;
+  } catch (error: any) {
+    // Default to 18 decimals if we can't fetch (most ERC20 tokens use 18)
+    return 18;
+  }
+}
 
 /**
  * Get current pool state with caching
@@ -69,6 +114,12 @@ export async function getPoolState(poolAddress: string): Promise<PoolState> {
       poolContract.feeGrowthGlobal1X128()
     ]);
     
+    // Fetch token decimals for price calculation
+    const [decimals0, decimals1] = await Promise.all([
+      getTokenDecimals(token0),
+      getTokenDecimals(token1)
+    ]);
+    
     const poolState: PoolState = {
       address: normalizedAddress,
       sqrtPriceX96: slot0.sqrtPriceX96,
@@ -80,6 +131,8 @@ export async function getPoolState(poolAddress: string): Promise<PoolState> {
       tickSpacing,
       token0: ethers.utils.getAddress(token0),
       token1: ethers.utils.getAddress(token1),
+      decimals0,
+      decimals1,
       unlocked: slot0.unlocked,
       timestamp: Date.now()
     };
@@ -181,11 +234,37 @@ export function isPoolStateFresh(poolState: PoolState, maxAgeMs: number = CACHE_
 }
 
 /**
- * Get current price from pool state
+ * Get current price from pool state with decimal adjustment
  * @param poolState The pool state
- * @returns Current price (token1/token0)
+ * @returns Current price (token1/token0) adjusted for decimals
  */
-export function getCurrentPrice(poolState: PoolState): ethers.BigNumber {
+export function getCurrentPrice(poolState: PoolState): number {
+  // Uniswap V3 price formula: price = (sqrtPriceX96^2 / 2^192) * 10^(decimals0 - decimals1)
+  const Q96 = ethers.BigNumber.from('79228162514264337593543950336'); // 2^96
+  const sqrtPrice = poolState.sqrtPriceX96;
+  
+  // Calculate price with proper decimal handling
+  // price = (sqrtPriceX96^2 / 2^192)
+  const priceX192 = sqrtPrice.mul(sqrtPrice);
+  const priceBase = priceX192.div(Q96).div(Q96);
+  
+  // Convert to float for decimal adjustment
+  const priceFloat = parseFloat(ethers.utils.formatEther(priceBase.mul(ethers.constants.WeiPerEther)));
+  
+  // Adjust for token decimals: multiply by 10^(decimals0 - decimals1)
+  const decimals0 = poolState.decimals0 || 18;
+  const decimals1 = poolState.decimals1 || 18;
+  const decimalAdjustment = Math.pow(10, decimals0 - decimals1);
+  
+  return priceFloat * decimalAdjustment;
+}
+
+/**
+ * Get current price from pool state (legacy - returns BigNumber)
+ * @param poolState The pool state
+ * @returns Current price (token1/token0) as BigNumber
+ */
+export function getCurrentPriceBigNumber(poolState: PoolState): ethers.BigNumber {
   // Convert sqrtPriceX96 to price
   // price = (sqrtPriceX96 / 2^96)^2
   const Q96 = ethers.BigNumber.from('79228162514264337593543950336'); // 2^96
