@@ -1,177 +1,152 @@
 import { ethers } from 'ethers';
-import { MempoolWatcher, PendingSwap } from '../watcher/mempoolWatcher';
-import { Simulator, JitParameters } from '../watcher/simulator';
-import { BundleBuilder } from '../bundler/bundleBuilder';
-import { Executor } from '../executor/executor';
-import { Metrics, SwapOpportunity } from '../metrics/metrics';
-import { PoolCoordinator } from '../coordinator/poolCoordinator';
-import config from '../../config.json';
-import * as dotenv from 'dotenv';
+import { getConfig, getHttpProvider, getWsProvider, getWallet, validateNoLiveExecution } from '../config';
+import { initializeLogger, getLogger, createCandidateLogger, logJitOpportunity, logStartupConfiguration, logShutdown, flushLogs } from '../logging/logger';
+import { initializeMetrics } from '../metrics/prom';
+import { getMultiplePoolStates } from '../pool/stateFetcher';
+import { fastSimulate, quickProfitabilityCheck } from '../simulator/fastSim';
+import { validateJitStrategy } from '../simulator/forkSim';
+import { getGasPriceGwei, checkGasPrice } from '../util/gasEstimator';
 
-dotenv.config();
+export interface PendingSwap {
+  hash: string;
+  pool: string;
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: string;
+  gasPrice?: string;
+  blockNumber?: number;
+}
 
-export interface BotConfig {
-  mode: 'simulation' | 'live';
-  network: string;
-  profitThresholdUSD: number;
-  maxGasGwei: number;
-  retryAttempts: number;
-  retryDelayMs: number;
-  useMultiPool: boolean;
+export interface JitOpportunity {
+  traceId: string;
+  candidateId: string;
+  poolAddress: string;
+  swapHash: string;
+  amountIn: ethers.BigNumber;
+  tokenIn: string;
+  tokenOut: string;
+  estimatedProfitUsd: number;
+  gasPrice: ethers.BigNumber;
+  stage: 'detected' | 'simulated' | 'validated' | 'failed';
+  profitable: boolean;
+  reason: string;
 }
 
 export class JitBot {
-  private provider: ethers.providers.JsonRpcProvider;
-  private mempoolWatcher: MempoolWatcher | null = null; // For single-pool mode
-  private poolCoordinator: PoolCoordinator | null = null; // For multi-pool mode
-  private simulator: Simulator;
-  private bundleBuilder: BundleBuilder;
-  private executor: Executor;
-  private metrics: Metrics;
+  private httpProvider: ethers.providers.JsonRpcProvider;
+  private wsProvider: ethers.providers.WebSocketProvider;
+  private wallet: ethers.Wallet;
+  private config: any;
+  private logger: any;
+  private metrics: any;
   private isRunning: boolean = false;
-  private contractAddress: string;
-  private config: BotConfig;
+  private opportunities: Map<string, JitOpportunity> = new Map();
 
   constructor() {
-    // Determine execution mode
-    const isProduction = process.env.NODE_ENV === 'production';
-    const mode = isProduction ? 'live' : 'simulation';
+    // Initialize configuration and logging first
+    this.config = getConfig();
+    initializeLogger();
+    this.logger = getLogger().child({ component: 'jit-bot' });
     
-    // Initialize configuration
-    this.config = {
-      mode,
-      network: mode === 'live' ? 'mainnet' : 'fork',
-      profitThresholdUSD: parseFloat(process.env.PROFIT_THRESHOLD_USD || '10.0'),
-      maxGasGwei: parseFloat(process.env.MAX_GAS_GWEI || '100'),
-      retryAttempts: 3,
-      retryDelayMs: 1000,
-      useMultiPool: process.env.ENABLE_MULTI_POOL === 'true' || process.env.POOL_IDS !== undefined
-    };
+    // Log startup configuration
+    logStartupConfiguration();
+    
+    // Initialize providers
+    this.httpProvider = getHttpProvider(this.config);
+    this.wsProvider = getWsProvider(this.config);
+    this.wallet = getWallet(this.config, this.httpProvider);
+    
+    // Initialize metrics
+    this.metrics = initializeMetrics({
+      port: this.config.prometheusPort
+    });
+    
+    // Initialize pools in metrics
+    this.initializePoolMetrics();
+    
+    this.logger.info({
+      msg: 'JIT Bot initialized',
+      mode: this.config.simulationMode ? 'simulation' : 'live',
+      chain: this.config.chain,
+      poolCount: this.config.poolIds.length
+    });
 
-    console.log(`🤖 Starting JIT Bot in ${this.config.mode.toUpperCase()} mode`);
-    console.log(`🌐 Target network: ${this.config.network}`);
-    console.log(`🔄 Multi-pool mode: ${this.config.useMultiPool ? 'ENABLED' : 'DISABLED'}`);
-
-    // Initialize provider
-    const rpcUrl = process.env.ETHEREUM_RPC_URL || config.rpc.ethereum;
-    this.provider = new ethers.providers.JsonRpcProvider(rpcUrl.replace('wss://', 'https://'));
-    
-    // Initialize components
-    this.simulator = new Simulator(rpcUrl.replace('wss://', 'https://'));
-    
-    if (!process.env.PRIVATE_KEY) {
-      throw new Error('PRIVATE_KEY environment variable is required');
-    }
-    
-    this.bundleBuilder = new BundleBuilder(process.env.PRIVATE_KEY, this.provider);
-    this.executor = new Executor(this.provider);
-    this.metrics = new Metrics(parseInt(process.env.METRICS_PORT || '3001'), this.config.mode === 'live');
-    
-    // Set contract address (would be deployed)
-    this.contractAddress = process.env.JIT_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000';
-    
-    if (this.config.mode === 'live' && this.contractAddress === '0x0000000000000000000000000000000000000000') {
-      throw new Error('JIT_CONTRACT_ADDRESS must be set for live mode');
-    }
-
-    // Initialize either multi-pool coordinator or single watcher
-    if (this.config.useMultiPool) {
-      this.poolCoordinator = new PoolCoordinator(
-        this.provider,
-        this.simulator,
-        this.bundleBuilder,
-        this.executor,
-        this.metrics,
-        this.contractAddress
-      );
-    } else {
-      this.mempoolWatcher = new MempoolWatcher(config.rpc.ethereum);
-    }
-    
     this.setupEventHandlers();
   }
 
-  private setupEventHandlers(): void {
-    // Handle detected swaps (only for single-pool mode)
-    if (this.mempoolWatcher) {
-      this.mempoolWatcher.on('swapDetected', async (swap: PendingSwap) => {
-        await this.handleSwapDetected(swap);
-      });
+  private initializePoolMetrics(): void {
+    for (const pool of this.config.pools) {
+      this.metrics.initializePool(pool.address, pool.symbol0, pool.symbol1);
     }
+  }
 
+  private setupEventHandlers(): void {
     // Handle process termination
     process.on('SIGINT', () => {
-      console.log('🛑 Received SIGINT, shutting down gracefully...');
+      this.logger.info({ msg: 'Received SIGINT, shutting down gracefully...' });
       this.stop();
     });
 
     process.on('SIGTERM', () => {
-      console.log('🛑 Received SIGTERM, shutting down gracefully...');
+      this.logger.info({ msg: 'Received SIGTERM, shutting down gracefully...' });
       this.stop();
     });
 
     // Handle uncaught exceptions
     process.on('uncaughtException', (error: Error) => {
-      console.error('❌ Uncaught exception:', error);
-      this.metrics.recordExecutionError(error.message);
+      this.logger.error({ err: error, msg: 'Uncaught exception' });
+      this.metrics.recordSimulationError('uncaught_exception', 'global');
       
-      if (this.config.mode === 'live') {
-        console.log('🚨 Critical error in live mode, shutting down for safety');
-        this.stop();
-      }
+      this.logger.error({ msg: 'Critical error, shutting down for safety' });
+      this.stop();
     });
 
     process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-      console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
-      this.metrics.recordExecutionError(`Unhandled rejection: ${String(reason)}`);
+      this.logger.error({ 
+        err: reason,
+        promise: promise.toString(),
+        msg: 'Unhandled rejection'
+      });
+      this.metrics.recordSimulationError('unhandled_rejection', 'global');
       
-      if (this.config.mode === 'live') {
-        console.log('🚨 Critical error in live mode, shutting down for safety');
-        this.stop();
-      }
+      this.logger.error({ msg: 'Critical error, shutting down for safety' });
+      this.stop();
     });
   }
 
   async start(): Promise<void> {
     if (this.isRunning) {
-      console.log('⚠️ Bot is already running');
+      this.logger.warn({ msg: 'Bot is already running' });
       return;
     }
 
-    console.log('🚀 Starting JIT Bot...');
-    console.log(`📊 Metrics server will be available at http://localhost:${process.env.METRICS_PORT || '3001'}`);
-    console.log(`💰 Profit threshold: $${this.config.profitThresholdUSD} USD`);
-    console.log(`⛽ Max gas price: ${this.config.maxGasGwei} gwei`);
+    this.logger.info({ msg: 'Starting JIT Bot...' });
 
     try {
       // Start metrics server
-      this.metrics.start();
+      await this.metrics.start();
+      this.logger.info({ 
+        msg: 'Metrics server started',
+        url: this.metrics.getMetricsUrl()
+      });
 
       // Validate configuration
       await this.validateConfiguration();
 
-      // Additional safety checks for live mode
-      if (this.config.mode === 'live') {
-        await this.performLiveModeChecks();
-      }
-
-      // Start either pool coordinator or mempool watcher
-      if (this.config.useMultiPool && this.poolCoordinator) {
-        await this.poolCoordinator.start();
-      } else if (this.mempoolWatcher) {
-        await this.mempoolWatcher.start();
-      }
+      // Start monitoring (simulation only in PR1)
+      await this.startMonitoring();
 
       this.isRunning = true;
-      console.log(`✅ JIT Bot started successfully in ${this.config.mode} mode`);
-      console.log('🔍 Monitoring mempool for opportunities...');
+      this.logger.info({ 
+        msg: 'JIT Bot started successfully',
+        mode: this.config.simulationMode ? 'SIMULATION' : 'LIVE'
+      });
 
-      // Keep the process alive
+      // Keep the process alive and run periodic tasks
       this.keepAlive();
 
     } catch (error: any) {
-      console.error('❌ Failed to start JIT Bot:', error);
-      this.metrics.recordExecutionError(error.message);
+      this.logger.error({ err: error, msg: 'Failed to start JIT Bot' });
       throw error;
     }
   }
@@ -181,323 +156,373 @@ export class JitBot {
       return;
     }
 
-    console.log('🛑 Stopping JIT Bot...');
+    logShutdown('Manual shutdown');
 
     try {
-      // Stop components
-      if (this.config.useMultiPool && this.poolCoordinator) {
-        await this.poolCoordinator.stop();
-      } else if (this.mempoolWatcher) {
-        await this.mempoolWatcher.stop();
+      // Stop WebSocket provider
+      if (this.wsProvider) {
+        this.wsProvider.removeAllListeners();
       }
       
-      this.metrics.stop();
+      // Stop metrics server
+      await this.metrics.stop();
+
+      // Flush logs
+      await flushLogs();
 
       this.isRunning = false;
-      console.log('✅ JIT Bot stopped successfully');
+      this.logger.info({ msg: 'JIT Bot stopped successfully' });
       process.exit(0);
 
     } catch (error) {
-      console.error('❌ Error stopping JIT Bot:', error);
+      this.logger.error({ err: error, msg: 'Error stopping JIT Bot' });
       process.exit(1);
     }
   }
 
   private async validateConfiguration(): Promise<void> {
-    console.log('🔍 Validating configuration...');
+    this.logger.info({ msg: 'Validating configuration...' });
 
     // Check RPC connection
     try {
-      const blockNumber = await this.provider.getBlockNumber();
-      console.log(`✅ Connected to Ethereum (block ${blockNumber})`);
+      const blockNumber = await this.httpProvider.getBlockNumber();
+      this.logger.info({ 
+        msg: 'Connected to blockchain',
+        chain: this.config.chain,
+        blockNumber
+      });
     } catch (error: any) {
       throw new Error(`Failed to connect to RPC: ${error.message}`);
     }
 
-    // Check contract address
-    if (this.contractAddress === '0x0000000000000000000000000000000000000000') {
-      if (this.config.mode === 'live') {
-        throw new Error('JIT contract address must be set for live mode');
-      }
-      console.log('⚠️ Warning: JIT contract address not set, using placeholder');
-    } else {
-      // Verify contract exists
-      const code = await this.provider.getCode(this.contractAddress);
-      if (code === '0x') {
-        throw new Error(`No contract found at address ${this.contractAddress}`);
-      }
-      console.log(`✅ JIT contract verified at ${this.contractAddress}`);
-    }
-
     // Validate wallet
-    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, this.provider);
-    const balance = await wallet.getBalance();
-    console.log(`💰 Wallet balance: ${ethers.utils.formatEther(balance)} ETH`);
+    const balance = await this.wallet.getBalance();
+    this.logger.info({ 
+      msg: 'Wallet validated',
+      address: this.wallet.address,
+      balanceEth: ethers.utils.formatEther(balance)
+    });
 
-    const minBalance = this.config.mode === 'live' ? '0.1' : '0.01';
-    if (balance.lt(ethers.utils.parseEther(minBalance))) {
-      const message = `Low wallet balance (< ${minBalance} ETH)`;
-      if (this.config.mode === 'live') {
-        throw new Error(message);
-      }
-      console.log(`⚠️ Warning: ${message}`);
+    // Update wallet balance metric
+    const balanceFloat = parseFloat(ethers.utils.formatEther(balance));
+    this.metrics.updateWalletBalance(balanceFloat);
+
+    // Check if we have minimum balance
+    const minBalance = ethers.utils.parseEther('0.01');
+    if (balance.lt(minBalance)) {
+      this.logger.warn({ 
+        msg: 'Low wallet balance',
+        balance: ethers.utils.formatEther(balance),
+        minimum: ethers.utils.formatEther(minBalance)
+      });
     }
 
-    console.log('✅ Configuration validated');
-  }
-
-  private async performLiveModeChecks(): Promise<void> {
-    console.log('🔒 Performing live mode safety checks...');
-
-    // Check Flashbots configuration
-    if (!process.env.FLASHBOTS_RELAY_URL) {
-      throw new Error('FLASHBOTS_RELAY_URL must be set for live mode');
-    }
-
-    // Verify we're on mainnet
-    const network = await this.provider.getNetwork();
-    if (network.chainId !== 1) {
-      throw new Error(`Expected mainnet (chainId: 1), got chainId: ${network.chainId}`);
-    }
-
-    // Check gas price limits
-    const currentGasPrice = await this.provider.getGasPrice();
-    const currentGwei = parseFloat(ethers.utils.formatUnits(currentGasPrice, 'gwei'));
+    // Validate pools
+    this.logger.info({ msg: 'Validating pool configurations...' });
+    const poolAddresses = this.config.pools.map((p: any) => p.address);
+    const poolStates = await getMultiplePoolStates(poolAddresses);
     
-    if (currentGwei > this.config.maxGasGwei) {
-      console.log(`⚠️ Warning: Current gas price (${currentGwei} gwei) exceeds limit (${this.config.maxGasGwei} gwei)`);
+    for (const pool of this.config.pools) {
+      const state = poolStates.get(pool.address);
+      if (state) {
+        this.logger.info({
+          msg: 'Pool validated',
+          pool: pool.pool,
+          address: pool.address,
+          tick: state.tick,
+          liquidity: ethers.utils.formatEther(state.liquidity)
+        });
+        
+        // Update pool metrics
+        const liquidityFloat = parseFloat(ethers.utils.formatEther(state.liquidity));
+        this.metrics.updatePoolLiquidity(pool.address, pool.symbol0, pool.symbol1, liquidityFloat);
+      } else {
+        this.logger.warn({
+          msg: 'Pool validation failed',
+          pool: pool.pool,
+          address: pool.address
+        });
+        this.metrics.setPoolDisabled(pool.address, true);
+      }
     }
 
-    console.log('✅ Live mode safety checks passed');
+    this.logger.info({ msg: 'Configuration validated successfully' });
   }
 
-  private async handleSwapDetected(swap: PendingSwap): Promise<void> {
-    console.log(`🎯 Processing swap opportunity: ${swap.hash}`);
+  private async startMonitoring(): Promise<void> {
+    this.logger.info({ msg: 'Starting pool monitoring (simulation mode)...' });
+    
+    // In PR1, we only simulate monitoring - no real mempool watching
+    // This demonstrates the monitoring loop without actual swap detection
+    
+    this.logger.info({ 
+      msg: 'Monitoring started in simulation mode',
+      note: 'Real mempool monitoring will be added in PR2'
+    });
+  }
 
-    const opportunity: SwapOpportunity = {
-      timestamp: Date.now(),
-      hash: swap.hash,
-      pool: swap.pool,
-      amountIn: swap.amountIn,
-      estimatedProfit: '0',
-      executed: false,
-      profitable: false
+  // Simulate processing a swap opportunity (for demonstration)
+  private async simulateOpportunityProcessing(): Promise<void> {
+    // This demonstrates how opportunities would be processed
+    const pools = this.config.pools;
+    if (pools.length === 0) return;
+    
+    const randomPool = pools[Math.floor(Math.random() * pools.length)];
+    const mockSwap: PendingSwap = {
+      hash: `0x${Math.random().toString(16).slice(2, 66)}`,
+      pool: randomPool.address,
+      tokenIn: randomPool.token0,
+      tokenOut: randomPool.token1,
+      amountIn: ethers.utils.parseEther('10').toString(), // 10 ETH swap
+      gasPrice: ethers.utils.parseUnits('20', 'gwei').toString()
     };
 
-    this.metrics.recordSwapDetected(opportunity);
+    await this.handleOpportunity(mockSwap);
+  }
+
+  private async handleOpportunity(swap: PendingSwap): Promise<void> {
+    const candidateLogger = createCandidateLogger(swap.pool, swap.hash);
+    const traceId = candidateLogger.bindings().traceId;
+    
+    const opportunity: JitOpportunity = {
+      traceId,
+      candidateId: swap.hash,
+      poolAddress: swap.pool,
+      swapHash: swap.hash,
+      amountIn: ethers.BigNumber.from(swap.amountIn),
+      tokenIn: swap.tokenIn,
+      tokenOut: swap.tokenOut,
+      estimatedProfitUsd: 0,
+      gasPrice: ethers.BigNumber.from(swap.gasPrice || '20000000000'),
+      stage: 'detected',
+      profitable: false,
+      reason: 'Opportunity detected'
+    };
 
     try {
-      // Step 1: Calculate optimal JIT parameters
-      const jitParams = await this.calculateJitParameters(swap);
+      // Record opportunity detection
+      this.metrics.recordOpportunityDetected(swap.pool);
+      this.opportunities.set(swap.hash, opportunity);
 
-      // Step 2: Simulate the JIT execution
-      const simulationResult = await this.simulator.simulateJitBundle(swap, jitParams);
+      logJitOpportunity(candidateLogger, {
+        traceId,
+        candidateId: swap.hash,
+        poolAddress: swap.pool,
+        swapHash: swap.hash,
+        amountIn: swap.amountIn,
+        tokenIn: swap.tokenIn,
+        tokenOut: swap.tokenOut,
+        estimatedProfitUsd: 0,
+        gasPrice: swap.gasPrice || '20000000000',
+        timestamp: Date.now(),
+        stage: 'detected'
+      });
 
-      opportunity.estimatedProfit = simulationResult.estimatedProfit.toString();
-      opportunity.profitable = simulationResult.profitable;
+      // Step 1: Quick profitability check
+      const quickCheck = await quickProfitabilityCheck({
+        poolAddress: swap.pool,
+        swapAmountIn: ethers.BigNumber.from(swap.amountIn),
+        swapTokenIn: swap.tokenIn,
+        swapTokenOut: swap.tokenOut
+      }, this.config.globalMinProfitUsd);
 
-      // Step 3: Apply profit threshold check
-      if (!this.isProfitable(simulationResult, swap)) {
-        console.log(`❌ Below profit threshold: ${simulationResult.reason}`);
-        this.metrics.recordSimulationFailure(simulationResult.reason || 'Below threshold');
+      if (!quickCheck.profitable) {
+        opportunity.stage = 'failed';
+        opportunity.reason = quickCheck.reason;
+        
+        candidateLogger.info({
+          msg: 'Quick profitability check failed',
+          estimatedProfitUsd: quickCheck.estimatedProfitUsd,
+          minThreshold: this.config.globalMinProfitUsd
+        });
+
+        this.metrics.recordJitFailure(swap.pool, 'unprofitable');
         return;
       }
 
-      console.log(`✅ Simulation successful, estimated profit: ${ethers.utils.formatEther(simulationResult.estimatedProfit)} ETH`);
+      // Check gas price check
+      const gasCheck = await checkGasPrice();
+      if (!gasCheck.acceptable) {
+        opportunity.stage = 'failed';
+        opportunity.reason = gasCheck.reason || 'Gas price too high';
+        
+        candidateLogger.warn({
+          msg: 'Gas price check failed',
+          currentGwei: gasCheck.currentGwei,
+          maxGwei: gasCheck.maxGwei
+        });
 
-      // Step 4: Gas price check for live mode
-      if (this.config.mode === 'live') {
-        const gasCheck = await this.checkGasPrice();
-        if (!gasCheck.acceptable) {
-          console.log(`❌ Gas price too high: ${gasCheck.currentGwei} gwei > ${this.config.maxGasGwei} gwei`);
-          return;
-        }
-      }
-
-      // Step 5: Build Flashbots bundle
-      const bundle = await this.bundleBuilder.buildJitBundle(swap, jitParams, this.contractAddress);
-
-      if (!this.bundleBuilder.validateBundle(bundle)) {
-        console.log('❌ Bundle validation failed');
-        this.metrics.recordBundleRejection('Bundle validation failed');
+        this.metrics.recordJitFailure(swap.pool, 'gas_price');
         return;
       }
 
-      this.metrics.recordBundleSubmitted(JSON.stringify(bundle));
+      // Update gas price metric
+      this.metrics.updateGasPrice(gasCheck.currentGwei);
 
-      // Step 6: Execute the bundle (with retry logic for live mode)
-      const executionResult = await this.executeWithRetry(bundle);
+      // Step 3: Detailed simulation
+      const fastResult = await fastSimulate({
+        poolAddress: swap.pool,
+        swapAmountIn: ethers.BigNumber.from(swap.amountIn),
+        swapTokenIn: swap.tokenIn,
+        swapTokenOut: swap.tokenOut
+      });
 
-      opportunity.executed = executionResult.success;
+      opportunity.stage = 'simulated';
+      opportunity.profitable = fastResult.profitable;
+      opportunity.estimatedProfitUsd = fastResult.expectedNetProfitUsd;
+      opportunity.reason = fastResult.reason || 'Simulation completed';
 
-      if (executionResult.success) {
-        console.log(`🎉 Bundle executed successfully!`);
-        this.metrics.recordBundleIncluded(
-          executionResult.bundleHash || '',
-          executionResult.profit || ethers.BigNumber.from(0),
-          executionResult.gasUsed || ethers.BigNumber.from(0)
-        );
-      } else {
-        console.log(`❌ Bundle execution failed: ${executionResult.error}`);
-        this.metrics.recordExecutionError(executionResult.error || 'Unknown error');
+      // Update metrics
+      this.metrics.updateSimulatedProfit(swap.pool, fastResult.expectedNetProfitUsd);
+      this.metrics.recordSimulationDuration('fast', swap.pool, 0.5); // Mock duration
+
+      if (!fastResult.profitable) {
+        candidateLogger.info({
+          msg: 'Fast simulation unprofitable',
+          estimatedProfitUsd: fastResult.expectedNetProfitUsd,
+          gasCostUsd: fastResult.gasCostUsd
+        });
+
+        this.metrics.recordJitFailure(swap.pool, 'simulation_unprofitable');
+        return;
       }
+
+      // Step 4: Validation simulation
+      const validationResult = await validateJitStrategy({
+        poolAddress: swap.pool,
+        swapAmountIn: ethers.BigNumber.from(swap.amountIn),
+        swapTokenIn: swap.tokenIn,
+        swapTokenOut: swap.tokenOut,
+        tickLower: fastResult.optimalPosition.tickLower,
+        tickUpper: fastResult.optimalPosition.tickUpper,
+        liquidityAmount: fastResult.optimalPosition.liquidity,
+        gasPrice: ethers.BigNumber.from(swap.gasPrice || '20000000000')
+      });
+
+      if (!validationResult.valid) {
+        opportunity.stage = 'failed';
+        opportunity.reason = `Validation failed: ${validationResult.issues.join(', ')}`;
+        
+        candidateLogger.warn({
+          msg: 'Strategy validation failed',
+          issues: validationResult.issues,
+          warnings: validationResult.warnings
+        });
+
+        this.metrics.recordJitFailure(swap.pool, 'validation_failed');
+        return;
+      }
+
+      // Step 5: EXECUTION BLOCKED IN PR1
+      opportunity.stage = 'failed';
+      opportunity.reason = 'Live execution blocked in PR1 (simulation-only mode)';
+      
+      candidateLogger.info({
+        msg: 'Opportunity validated but execution blocked',
+        note: 'PR1 is simulation-only - no live transactions',
+        estimatedProfitUsd: fastResult.expectedNetProfitUsd
+      });
+
+      // This is where execution would happen in PR2
+      validateNoLiveExecution('JIT bundle execution');
+
+      this.metrics.recordJitAttempt(swap.pool, 'blocked_pr1');
 
     } catch (error: any) {
-      console.error(`❌ Error processing swap ${swap.hash}:`, error);
-      this.metrics.recordExecutionError(error.message);
-      opportunity.reason = error.message;
+      opportunity.stage = 'failed';
+      opportunity.reason = `Processing error: ${error.message}`;
+      
+      candidateLogger.error({
+        err: error,
+        msg: 'Opportunity processing failed'
+      });
+
+      this.metrics.recordJitFailure(swap.pool, 'processing_error');
+    } finally {
+      // Log final opportunity state
+      logJitOpportunity(candidateLogger, {
+        traceId: opportunity.traceId,
+        candidateId: opportunity.candidateId,
+        poolAddress: opportunity.poolAddress,
+        swapHash: opportunity.swapHash,
+        amountIn: opportunity.amountIn.toString(),
+        tokenIn: opportunity.tokenIn,
+        tokenOut: opportunity.tokenOut,
+        estimatedProfitUsd: opportunity.estimatedProfitUsd,
+        gasPrice: opportunity.gasPrice.toString(),
+        timestamp: Date.now(),
+        stage: opportunity.stage,
+        result: opportunity.profitable ? 'profitable' : 'unprofitable',
+        reason: opportunity.reason
+      });
+      
+      this.opportunities.set(swap.hash, opportunity);
     }
-  }
-
-  private isProfitable(simulationResult: any, _swap: PendingSwap): boolean {
-    if (!simulationResult.profitable) {
-      return false;
-    }
-
-    // Convert profit to USD (simplified - would need price oracle)
-    const ethPrice = 2000; // $2000 per ETH (would fetch from oracle)
-    const profitETH = parseFloat(ethers.utils.formatEther(simulationResult.estimatedProfit));
-    const profitUSD = profitETH * ethPrice;
-
-    return profitUSD >= this.config.profitThresholdUSD;
-  }
-
-  private async checkGasPrice(): Promise<{ acceptable: boolean; currentGwei: number }> {
-    const currentGasPrice = await this.provider.getGasPrice();
-    const currentGwei = parseFloat(ethers.utils.formatUnits(currentGasPrice, 'gwei'));
-    
-    return {
-      acceptable: currentGwei <= this.config.maxGasGwei,
-      currentGwei
-    };
-  }
-
-  private async executeWithRetry(bundle: any): Promise<any> {
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
-      try {
-        console.log(`📤 Executing bundle (attempt ${attempt}/${this.config.retryAttempts})`);
-        
-        const result = await this.executor.executeBundle(bundle);
-        
-        if (result.success) {
-          return result;
-        }
-        
-        lastError = new Error(result.error || 'Execution failed');
-        
-        if (attempt < this.config.retryAttempts) {
-          const delay = this.config.retryDelayMs * attempt;
-          console.log(`⏳ Retrying in ${delay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-        
-      } catch (error: any) {
-        lastError = error;
-        console.error(`❌ Execution attempt ${attempt} failed:`, error.message);
-        
-        if (attempt < this.config.retryAttempts) {
-          const delay = this.config.retryDelayMs * attempt;
-          console.log(`⏳ Retrying in ${delay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-    }
-
-    return {
-      success: false,
-      error: lastError?.message || 'All retry attempts failed'
-    };
-  }
-
-  private async calculateJitParameters(swap: PendingSwap): Promise<JitParameters> {
-    // Find the target pool configuration
-    const poolConfig = config.targets.find(target => target.address === swap.pool);
-    
-    if (!poolConfig) {
-      throw new Error(`Pool configuration not found for ${swap.pool}`);
-    }
-
-    // Calculate optimal tick range
-    const currentPrice = ethers.BigNumber.from('1000000000000000000'); // 1 ETH = 1 token (simplified)
-    const targetPrice = currentPrice; // Use current price as target
-    const tickSpacing = 60; // Standard for 0.3% pools
-
-    const tickRange = this.simulator.calculateOptimalTickRange(
-      currentPrice,
-      targetPrice,
-      tickSpacing
-    );
-
-    // Calculate amounts based on loan size
-    const totalLoanAmount = ethers.utils.parseEther(config.maxLoanSize.toString());
-    const amount0 = swap.tokenIn.toLowerCase() === poolConfig.token0.toLowerCase() ? 
-      totalLoanAmount.div(2) : ethers.BigNumber.from(0);
-    const amount1 = swap.tokenIn.toLowerCase() === poolConfig.token1.toLowerCase() ? 
-      totalLoanAmount.div(2) : ethers.BigNumber.from(0);
-
-    return {
-      pool: swap.pool,
-      token0: poolConfig.token0,
-      token1: poolConfig.token1,
-      fee: poolConfig.fee,
-      tickLower: tickRange.tickLower,
-      tickUpper: tickRange.tickUpper,
-      amount0: amount0.toString(),
-      amount1: amount1.toString(),
-      deadline: Math.floor(Date.now() / 1000) + 300 // 5 minutes
-    };
   }
 
   private keepAlive(): void {
-    // Log status every 60 seconds
+    // Status logging every 60 seconds
     setInterval(() => {
       if (this.isRunning) {
-        const metrics = this.metrics.getMetrics();
-        console.log(`📊 Status [${this.config.mode}]: ${metrics.totalSwapsDetected} swaps detected, ${metrics.totalBundlesIncluded} successful executions`);
-        
-        if (this.config.mode === 'live') {
-          console.log(`💰 Total profit: ${ethers.utils.formatEther(metrics.totalProfitEth || '0')} ETH`);
-        }
+        this.logger.info({
+          msg: 'JIT Bot status',
+          mode: 'SIMULATION',
+          opportunities: this.opportunities.size,
+          activelyMonitoring: this.config.poolIds.length
+        });
       }
     }, 60000);
+
+    // Simulate opportunity detection every 30 seconds (for demo)
+    setInterval(() => {
+      if (this.isRunning) {
+        this.simulateOpportunityProcessing().catch(error => {
+          this.logger.error({
+            err: error,
+            msg: 'Error in simulated opportunity processing'
+          });
+        });
+      }
+    }, 30000);
+
+    // Update system metrics every 10 seconds
+    setInterval(async () => {
+      if (this.isRunning) {
+        try {
+          // Update wallet balance
+          const balance = await this.wallet.getBalance();
+          const balanceFloat = parseFloat(ethers.utils.formatEther(balance));
+          this.metrics.updateWalletBalance(balanceFloat);
+
+          // Update gas price
+          const gasPrice = await getGasPriceGwei();
+          this.metrics.updateGasPrice(gasPrice.gasPriceGwei);
+
+        } catch (error: any) {
+          this.logger.debug({
+            err: error,
+            msg: 'Error updating system metrics'
+          });
+        }
+      }
+    }, 10000);
   }
 
   // Public method to get bot status
   getStatus(): any {
-    const baseStatus = {
-      isRunning: this.isRunning,
-      mode: this.config.mode,
-      network: this.config.network,
-      contractAddress: this.contractAddress,
-      config: this.config,
-      metrics: this.metrics.getMetrics(),
-      botConfig: {
-        minProfitThreshold: config.minProfitThreshold,
-        maxLoanSize: config.maxLoanSize,
-        tickRangeWidth: config.tickRangeWidth,
-        targets: config.targets.length
-      }
-    };
-
-    // Add pool coordinator status if in multi-pool mode
-    if (this.config.useMultiPool && this.poolCoordinator) {
-      return {
-        ...baseStatus,
-        multiPool: {
-          enabled: true,
-          pools: this.poolCoordinator.getPoolStatus(),
-          currentOpportunities: this.poolCoordinator.getCurrentOpportunities()
-        }
-      };
-    }
-
     return {
-      ...baseStatus,
-      multiPool: {
-        enabled: false
-      }
+      isRunning: this.isRunning,
+      mode: this.config.simulationMode ? 'simulation' : 'live',
+      chain: this.config.chain,
+      walletAddress: this.wallet.address,
+      opportunities: Array.from(this.opportunities.values()),
+      config: {
+        poolIds: this.config.poolIds,
+        globalMinProfitUsd: this.config.globalMinProfitUsd,
+        maxGasGwei: this.config.maxGasGwei,
+        prometheusPort: this.config.prometheusPort
+      },
+      metricsUrl: this.metrics.getMetricsUrl()
     };
   }
 }
@@ -525,12 +550,15 @@ if (require.main === module) {
       console.log('Usage: ts-node src/bot/index.ts [start|status]');
       console.log('');
       console.log('Commands:');
-      console.log('  start   - Start the JIT bot');
+      console.log('  start   - Start the JIT bot in simulation mode');
       console.log('  status  - Show bot status');
       console.log('');
       console.log('Environment:');
-      console.log('  NODE_ENV=production - Run in live mode');
-      console.log('  NODE_ENV=development - Run in simulation mode (default)');
+      console.log('  SIMULATION_MODE=true - Run in simulation mode (default, required in PR1)');
+      console.log('  NODE_ENV=development - Development mode (default)');
+      console.log('  NODE_ENV=production - Production mode (with SIMULATION_MODE=true)');
+      console.log('');
+      console.log('Note: Live execution is blocked in PR1 for safety.');
       process.exit(1);
   }
 }
