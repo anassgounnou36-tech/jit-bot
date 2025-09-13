@@ -16,6 +16,7 @@ describe('PriceOracle', () => {
     // Set test environment variables
     process.env.CHAIN = 'ethereum';
     process.env.RPC_URL_HTTP = 'http://localhost:8545';
+    process.env.RPC_URL_WS = 'ws://localhost:8545';
     process.env.SIMULATION_MODE = 'true';
     process.env.PRIVATE_KEY = '0x' + '1'.repeat(64);
   });

@@ -29,6 +29,7 @@ describe('GasEstimator', () => {
     // Set test environment variables
     process.env.MAX_GAS_GWEI = '100';
     process.env.RPC_URL_HTTP = 'http://localhost:8545';
+    process.env.RPC_URL_WS = 'ws://localhost:8545';
     process.env.CHAIN = 'ethereum';
     process.env.SIMULATION_MODE = 'true';
     process.env.PRIVATE_KEY = '0x' + '1'.repeat(64);
@@ -76,7 +77,7 @@ describe('GasEstimator', () => {
       const gasCost = calculateGasCost(gasEstimate, gasUsed);
       
       expect(gasCost).to.be.instanceOf(ethers.BigNumber);
-      expect(gasCost).to.equal(gasPrice.mul(gasUsed));
+      expect(gasCost.eq(gasPrice.mul(gasUsed))).to.be.true;
     });
 
     it('should use default gas amount when not specified', () => {
@@ -93,7 +94,7 @@ describe('GasEstimator', () => {
       
       const gasCost = calculateGasCost(gasEstimate);
       
-      expect(gasCost).to.equal(gasPrice.mul(JIT_GAS_CONSTANTS.totalEstimate));
+      expect(gasCost.eq(gasPrice.mul(JIT_GAS_CONSTANTS.totalEstimate))).to.be.true;
     });
   });
 
