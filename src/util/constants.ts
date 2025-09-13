@@ -30,9 +30,7 @@ export function normalizeTokenAddress(
   tokenSymbol: string = 'UNKNOWN',
   logger?: any
 ): string {
-  const checksumAddress = ethers.utils.getAddress(address);
-  
-  // Check for known incorrect USDC address
+  // Check for known incorrect USDC address BEFORE attempting to checksum
   if (address.toLowerCase() === INCORRECT_ADDRESSES.USDC_INCORRECT.toLowerCase()) {
     const correctAddress = TOKEN_ADDRESSES.ETHEREUM.USDC;
     
@@ -50,7 +48,8 @@ export function normalizeTokenAddress(
     return correctAddress;
   }
   
-  return checksumAddress;
+  // For all other addresses, checksum normally
+  return ethers.utils.getAddress(address);
 }
 
 /**
