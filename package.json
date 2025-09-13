@@ -7,6 +7,7 @@
     "build": "hardhat compile",
     "test": "hardhat test",
     "test:coverage": "hardhat coverage",
+    "ci": "npm run lint && npm run test",
     "start": "node dist/bot/index.js",
     "dev": "ts-node src/bot/index.ts",
     "live": "NODE_ENV=production ts-node src/bot/index.ts start",
@@ -16,6 +17,7 @@
     "simulate": "ts-node scripts/simulateExample.ts",
     "fork": "ts-node scripts/startFork.ts",
     "fork:simulate": "ts-node scripts/forkSimulation.ts",
+    "metrics": "ts-node src/metrics/server.ts",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix"
   },
@@ -40,6 +42,7 @@
     "@types/express": "^5.0.3",
     "@types/mocha": "^10.0.0",
     "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.0",
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
@@ -60,6 +63,10 @@
     "dotenv": "^16.3.0",
     "ethers": "^5.7.2",
     "express": "^4.18.0",
+    "pino": "^8.15.0",
+    "pino-pretty": "^10.2.0",
+    "prom-client": "^14.2.0",
+    "uuid": "^9.0.0",
     "ws": "^8.14.0"
   }
 }
