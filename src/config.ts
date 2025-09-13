@@ -2,6 +2,7 @@ import * as dotenv from 'dotenv';
 import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
+import { normalizeTokenAddress } from './util/constants';
 
 // Load environment variables
 dotenv.config();
@@ -165,12 +166,12 @@ export function loadConfig(): JitBotConfig {
     throw new Error(`Chain configuration not found for: ${chain}`);
   }
   
-  // Normalize pool addresses to checksummed format
+  // Normalize pool addresses to checksummed format and validate USDC addresses
   const pools: PoolConfig[] = jsonConfig.targets.map((target: any) => ({
     ...target,
     address: ethers.utils.getAddress(target.address),
-    token0: ethers.utils.getAddress(target.token0),
-    token1: ethers.utils.getAddress(target.token1)
+    token0: ethers.utils.getAddress(normalizeTokenAddress(target.token0, target.symbol0)),
+    token1: ethers.utils.getAddress(normalizeTokenAddress(target.token1, target.symbol1))
   }));
   
   // Validate required pools are configured

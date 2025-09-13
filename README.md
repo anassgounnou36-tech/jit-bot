@@ -204,7 +204,7 @@ npm run dev
          "pool": "WETH-USDC-0.05%",
          "address": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
          "token0": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-         "token1": "0xA0b86a33E6441b80B05fdC68F34f8c9C31C8DE4E",
+         "token1": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
          "fee": 500
        },
        {
@@ -293,6 +293,32 @@ gas_price_gwei 25.4  # Current network gas price, capped by MAX_GAS_GWEI
 ```
 
 **Note:** In simulation mode, all `jit_failure_total` with `error_type="blocked_live_execution"` is expected as live execution is disabled for safety.
+
+### Per-Pool Profit Tracking
+
+Metrics now provide **per-pool last simulated profit** tracking:
+
+```bash
+# Each pool tracks its latest simulation result independently
+current_simulated_profit_usd{pool="0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"} 45.23  # WETH-USDC
+current_simulated_profit_usd{pool="0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36"} 32.10  # ETH-USDT
+current_simulated_profit_usd{pool="0xCBCdF9626bC03E24f779434178A73a0B4bad62eD"} 78.45  # WBTC-ETH
+```
+
+This enables monitoring profitability across different pools and fee tiers independently.
+
+### Token Address Validation
+
+⚠️ **USDC Address Correction**: The bot automatically detects and corrects the incorrect USDC address:
+
+- **Incorrect**: `0xa0b86a33e6441b80b05fdc68f34f8c9c31c8e9a` ❌
+- **Correct**: `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` ✅ (Canonical USDC mainnet address)
+
+**Behavior:**
+- **Simulation mode**: Automatically corrects and logs a warning
+- **Live mode**: Throws an error and prevents execution with incorrect addresses
+
+The bot normalizes all token addresses to proper checksum format and validates against known canonical addresses.
 
 ## 🚀 Deployment
 
