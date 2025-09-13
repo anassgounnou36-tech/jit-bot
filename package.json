@@ -7,7 +7,7 @@
     "build": "hardhat compile",
     "test": "hardhat test",
     "test:coverage": "hardhat coverage",
-    "test:unit": "ts-mocha test/unit/**/*.test.ts",
+    "test:unit": "mocha",
     "test:fork": "ts-mocha test/integration/**/*.test.ts --timeout 30000",
     "test:all": "npm run test:unit && npm run test:fork",
     "start": "node dist/bot/index.js",
