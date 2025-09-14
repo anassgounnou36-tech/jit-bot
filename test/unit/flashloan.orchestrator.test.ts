@@ -32,7 +32,7 @@ describe('Flashloan Orchestrator', function () {
       aaveAdapter.hasSufficientLiquidity = async () => true;
       aaveAdapter.calculateFlashloanFee = async () => ethers.utils.parseEther('0.005'); // 0.5% fee
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('100');
 
       const result = await orchestrator.selectOptimalProvider(token, amount, mockProvider);
@@ -54,7 +54,7 @@ describe('Flashloan Orchestrator', function () {
         return amount.mul(5).div(10000); // 0.05% fee
       };
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('1000');
 
       const result = await orchestrator.selectOptimalProvider(token, amount, mockProvider);
@@ -72,7 +72,7 @@ describe('Flashloan Orchestrator', function () {
       const aaveAdapter = getAaveAdapter(mockProvider);
       aaveAdapter.hasSufficientLiquidity = async () => false;
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('10000'); // Very large amount
 
       try {
@@ -91,7 +91,7 @@ describe('Flashloan Orchestrator', function () {
       balancerAdapter.hassufficientLiquidity = async () => true;
       balancerAdapter.calculateFlashloanFee = async () => ethers.BigNumber.from(0);
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // Valid USDC address
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // Valid USDC address
       const amount = ethers.utils.parseEther('100');
 
       const result = await orchestrator.validateFlashloanParams(token, amount, mockProvider);
@@ -114,7 +114,7 @@ describe('Flashloan Orchestrator', function () {
     });
 
     it('should reject zero or negative amounts', async function () {
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const zeroAmount = ethers.BigNumber.from(0);
 
       const result = await orchestrator.validateFlashloanParams(token, zeroAmount, mockProvider);
@@ -136,7 +136,7 @@ describe('Flashloan Orchestrator', function () {
         return amount.mul(5).div(10000); // 0.05% fee
       };
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('1000');
 
       const result = await orchestrator.validateFlashloanParams(token, amount, mockProvider);
@@ -155,7 +155,7 @@ describe('Flashloan Orchestrator', function () {
       balancerAdapter.hassufficientLiquidity = async () => true;
       balancerAdapter.calculateFlashloanFee = async () => ethers.BigNumber.from(0);
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('500');
 
       const result = await orchestrator.validateFlashloanParams(token, amount, mockProvider);
@@ -174,7 +174,7 @@ describe('Flashloan Orchestrator', function () {
         throw new Error('Balancer API unavailable');
       };
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('100');
 
       const result = await orchestrator.validateFlashloanParams(token, amount, mockProvider);
@@ -193,7 +193,7 @@ describe('Flashloan Orchestrator', function () {
       aaveAdapter.hasSufficientLiquidity = async () => true;
       aaveAdapter.calculateFlashloanFee = async () => ethers.utils.parseEther('0.005');
 
-      const token = '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c'; // USDC
+      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('100');
 
       const result = await orchestrator.selectOptimalProvider(token, amount, mockProvider);

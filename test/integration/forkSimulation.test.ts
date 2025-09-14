@@ -216,7 +216,7 @@ describe('Fork Integration Tests', function () {
       const simulationParams = {
         poolAddress: '0x0000000000000000000000000000000000000000', // Invalid pool
         swapAmountIn: ethers.utils.parseEther('10'),
-        swapTokenIn: '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c',
+        swapTokenIn: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
         swapTokenOut: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
         tickLower: -60,
         tickUpper: 60,
@@ -235,7 +235,7 @@ describe('Fork Integration Tests', function () {
       const simulationParams = {
         poolAddress: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8',
         swapAmountIn: ethers.utils.parseEther('10'),
-        swapTokenIn: '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c',
+        swapTokenIn: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
         swapTokenOut: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
         tickLower: -60,
         tickUpper: 60,

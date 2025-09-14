@@ -15,7 +15,8 @@ export const TOKEN_ADDRESSES = {
  * Known incorrect addresses that should be auto-corrected
  */
 export const INCORRECT_ADDRESSES = {
-  USDC_INCORRECT: '0xa0b86a33e6441b80b05fdc68f34f8c9c31c8e9a' // Incorrect USDC address to guard against
+  USDC_INCORRECT: '0xa0b86a33e6441b80b05fdc68f34f8c9c31c8e9a', // Incorrect USDC address to guard against
+  USDC_INCORRECT_VARIANT_2: '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c' // Another incorrect USDC variant found in fixtures
 } as const;
 
 /**
@@ -30,8 +31,11 @@ export function normalizeTokenAddress(
   tokenSymbol: string = 'UNKNOWN',
   logger?: any
 ): string {
-  // Check for known incorrect USDC address BEFORE attempting to checksum
-  if (address.toLowerCase() === INCORRECT_ADDRESSES.USDC_INCORRECT.toLowerCase()) {
+  const lowerAddress = address.toLowerCase();
+  
+  // Check for known incorrect USDC addresses BEFORE attempting to checksum
+  if (lowerAddress === INCORRECT_ADDRESSES.USDC_INCORRECT.toLowerCase() ||
+      lowerAddress === INCORRECT_ADDRESSES.USDC_INCORRECT_VARIANT_2.toLowerCase()) {
     const correctAddress = TOKEN_ADDRESSES.ETHEREUM.USDC;
     
     if (logger) {
@@ -59,9 +63,10 @@ export function normalizeTokenAddress(
  */
 export function validateUsdcAddress(address: string, simulationMode: boolean = true): void {
   const normalizedAddress = address.toLowerCase();
-  const incorrectAddress = INCORRECT_ADDRESSES.USDC_INCORRECT.toLowerCase();
+  const incorrectAddress1 = INCORRECT_ADDRESSES.USDC_INCORRECT.toLowerCase();
+  const incorrectAddress2 = INCORRECT_ADDRESSES.USDC_INCORRECT_VARIANT_2.toLowerCase();
   
-  if (normalizedAddress === incorrectAddress) {
+  if (normalizedAddress === incorrectAddress1 || normalizedAddress === incorrectAddress2) {
     const correctAddress = TOKEN_ADDRESSES.ETHEREUM.USDC;
     const message = `Incorrect USDC address detected: ${address}. Expected: ${correctAddress}`;
     
