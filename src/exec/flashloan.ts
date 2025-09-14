@@ -578,9 +578,9 @@ export class FlashloanOrchestrator {
   }
   
   /**
-   * Validate flashloan parameters
+   * Validate flashloan parameters for specific provider
    */
-  async validateFlashloanParams(
+  async validateFlashloanParamsForProvider(
     token: string,
     amount: ethers.BigNumber,
     providerName?: string

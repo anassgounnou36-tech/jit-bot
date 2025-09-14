@@ -205,7 +205,7 @@ export class MempoolWatcher extends EventEmitter {
    * Get raw transaction bytes from mempool (production implementation)
    * This requires a provider that exposes raw mempool transactions
    */
-  async getRawTransactionBytes(txHash: string): Promise<string | undefined> {
+  async getRawTransactionBytes(_txHash: string): Promise<string | undefined> {
     try {
       // This would use a custom RPC method or mempool service
       // For example: eth_getRawTransactionByHash (not standard)

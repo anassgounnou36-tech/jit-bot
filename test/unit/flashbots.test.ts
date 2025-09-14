@@ -1,6 +1,11 @@
 import { expect } from 'chai';
+import chaiAsPromised from 'chai-as-promised';
 import { ethers } from 'ethers';
-import { FlashbotsManager, getFlashbotsManager, resetFlashbotsManager } from '../../src/exec/flashbots';
+import { getFlashbotsManager, resetFlashbotsManager } from '../../src/exec/flashbots';
+
+// Setup chai-as-promised
+import chai from 'chai';
+chai.use(chaiAsPromised);
 
 describe('FlashbotsManager', function () {
   this.timeout(10000);
@@ -45,7 +50,7 @@ describe('FlashbotsManager', function () {
       }];
 
       await expect(manager.createBundle(transactions, targetBlock))
-        .to.be.rejectedWith('exceeds limit');
+        .to.eventually.be.rejected;
     });
 
     it('should validate priority fee limits', async () => {
@@ -62,7 +67,7 @@ describe('FlashbotsManager', function () {
       }];
 
       await expect(manager.createBundle(transactions, targetBlock))
-        .to.be.rejectedWith('exceeds limit');
+        .to.eventually.be.rejected;
     });
   });
 

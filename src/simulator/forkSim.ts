@@ -56,7 +56,6 @@ export interface PreflightResult {
     burnLiquiditySimulation: boolean;
     bundleSimulation: boolean;
     victimTxIncluded: boolean;
-  };
     repaymentSimulation: boolean;
   };
 }
@@ -230,6 +229,8 @@ async function simulateFullSequence(
     mintLiquiditySimulation: false,
     swapExecutionSimulation: false,
     burnLiquiditySimulation: false,
+    bundleSimulation: false,
+    victimTxIncluded: false,
     repaymentSimulation: false
   };
 
@@ -490,6 +491,8 @@ function createFailedPreflightResult(reason: string, logger: any): PreflightResu
       mintLiquiditySimulation: false,
       swapExecutionSimulation: false,
       burnLiquiditySimulation: false,
+      bundleSimulation: false,
+      victimTxIncluded: false,
       repaymentSimulation: false
     }
   };
@@ -811,7 +814,7 @@ export function estimateSimulationTime(params: ForkSimulationParams): number {
  */
 async function simulateBundleWithVictim(
   params: ForkSimulationParams,
-  sequenceResult: any
+  _sequenceResult: any
 ): Promise<{
   success: boolean;
   victimIncluded: boolean;
@@ -923,7 +926,7 @@ async function simulateBundleWithVictim(
 async function getLatestBlockNumber(): Promise<number> {
   try {
     const config = getConfig();
-    const provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+    const provider = new ethers.providers.JsonRpcProvider(config.rpcUrlHttp);
     return await provider.getBlockNumber();
   } catch (error) {
     // Fallback to a reasonable block number for simulation
