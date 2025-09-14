@@ -99,7 +99,7 @@ export class FlashbotsManager {
     }
 
     // Convert to transaction requests
-    const txRequests: ethers.providers.TransactionRequest[] = transactions.map((tx, index) => ({
+    const txRequests: ethers.providers.TransactionRequest[] = transactions.map((tx) => ({
       to: tx.to,
       data: tx.data,
       value: tx.value || ethers.BigNumber.from(0),
@@ -155,8 +155,8 @@ export class FlashbotsManager {
           bundleHash: `0x${Math.random().toString(16).slice(2, 66)}`,
           simulation: {
             success: true,
-            gasUsed: bundle.transactions.reduce((sum, tx) => sum + (tx.gasLimit || 0), 0),
-            effectiveGasPrice: bundle.transactions[0]?.maxFeePerGas || ethers.utils.parseUnits('20', 'gwei'),
+            gasUsed: bundle.transactions.reduce((sum, tx) => sum + Number(tx.gasLimit || 0), 0),
+            effectiveGasPrice: ethers.BigNumber.from(bundle.transactions[0]?.maxFeePerGas || ethers.utils.parseUnits('20', 'gwei')),
             totalValue: bundle.transactions.reduce((sum, tx) => sum.add(tx.value || 0), ethers.BigNumber.from(0))
           }
         };

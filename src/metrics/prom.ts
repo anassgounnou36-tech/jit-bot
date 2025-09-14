@@ -326,10 +326,6 @@ export class PrometheusMetrics {
     currentSimulatedProfitUsd.set({ pool }, profitUsd);
   }
 
-  public updateLastBundleBlock(blockNumber: number): void {
-    lastBundleBlockNumber.set(blockNumber);
-  }
-
   public updateWalletBalance(balanceEth: number): void {
     walletBalanceEth.set(balanceEth);
   }

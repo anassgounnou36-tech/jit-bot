@@ -51,7 +51,7 @@ export class AaveV3FlashloanProvider implements IFlashloanProvider {
   
   // Aave V3 Mainnet addresses
   private static readonly POOL_ADDRESS = '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2';
-  private static readonly POOL_ADDRESSES_PROVIDER = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e';
+  // private static readonly POOL_ADDRESSES_PROVIDER = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e';
   
   // Standard Aave V3 fee: 0.05%
   private static readonly FLASHLOAN_FEE_PERCENTAGE = 5; // 0.05% = 5/10000
@@ -69,10 +69,10 @@ export class AaveV3FlashloanProvider implements IFlashloanProvider {
     }
   }
   
-  async getMaxFlashloanAmount(token: string): Promise<ethers.BigNumber> {
+  async getMaxFlashloanAmount(_token: string): Promise<ethers.BigNumber> {
     try {
       // Query the Aave pool to get available liquidity
-      const provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrlHttp);
+      // const provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrlHttp);
       
       // Simplified: assume we can borrow up to 80% of token balance in pool
       // In production, this would query the actual Aave pool contract
@@ -80,7 +80,7 @@ export class AaveV3FlashloanProvider implements IFlashloanProvider {
       
       this.logger.debug({
         msg: 'Fetched max flashloan amount',
-        token,
+        token: _token,
         maxAmount: ethers.utils.formatEther(mockAvailability)
       });
       
@@ -90,7 +90,7 @@ export class AaveV3FlashloanProvider implements IFlashloanProvider {
       this.logger.error({
         err: error,
         msg: 'Failed to get max flashloan amount',
-        token
+        token: _token
       });
       
       // Return conservative fallback
@@ -138,13 +138,13 @@ export class AaveV3FlashloanProvider implements IFlashloanProvider {
     };
   }
   
-  async calculateFlashloanFee(token: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
+  async calculateFlashloanFee(_token: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
     // Aave V3 charges 0.05% fee
     const fee = amount.mul(AaveV3FlashloanProvider.FLASHLOAN_FEE_PERCENTAGE).div(10000);
     
     this.logger.debug({
       msg: 'Calculated flashloan fee',
-      token,
+      token: _token,
       amount: ethers.utils.formatEther(amount),
       fee: ethers.utils.formatEther(fee),
       feePercentage: '0.05%'
@@ -153,7 +153,7 @@ export class AaveV3FlashloanProvider implements IFlashloanProvider {
     return fee;
   }
   
-  async getFlashloanPoolAddress(token: string): Promise<string> {
+  async getFlashloanPoolAddress(_token: string): Promise<string> {
     // For Aave V3, all flashloans go through the main Pool contract
     return AaveV3FlashloanProvider.POOL_ADDRESS;
   }
@@ -166,24 +166,24 @@ export class CompoundV3FlashloanProvider implements IFlashloanProvider {
   readonly name = 'compound-v3';
   readonly enabled = false; // Not implemented yet
   
-  async getMaxFlashloanAmount(token: string): Promise<ethers.BigNumber> {
+  async getMaxFlashloanAmount(_token: string): Promise<ethers.BigNumber> {
     throw new Error('Compound V3 flashloan provider not implemented yet');
   }
   
   async buildFlashloanCall(
-    token: string,
-    amount: ethers.BigNumber,
-    receiverAddress: string,
-    calldata: string
+    _token: string,
+    _amount: ethers.BigNumber,
+    _receiverAddress: string,
+    _calldata: string
   ): Promise<{ to: string; data: string; value: ethers.BigNumber; }> {
     throw new Error('Compound V3 flashloan provider not implemented yet');
   }
   
-  async calculateFlashloanFee(token: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
+  async calculateFlashloanFee(_token: string, _amount: ethers.BigNumber): Promise<ethers.BigNumber> {
     throw new Error('Compound V3 flashloan provider not implemented yet');
   }
   
-  async getFlashloanPoolAddress(token: string): Promise<string> {
+  async getFlashloanPoolAddress(_token: string): Promise<string> {
     throw new Error('Compound V3 flashloan provider not implemented yet');
   }
 }
