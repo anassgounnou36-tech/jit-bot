@@ -25,7 +25,6 @@ jobs:
       
     - name: Run ESLint
       run: npm run lint
-      continue-on-error: true  # Allow lint errors but continue
       
     - name: TypeScript compilation check
       run: npx tsc --noEmit
@@ -104,9 +103,8 @@ jobs:
     - name: Build TypeScript
       run: npx tsc
       
-    - name: Build contracts (if possible)
+    - name: Build contracts
       run: npm run build
-      continue-on-error: true  # Hardhat compilation may fail due to network issues
 
   security-scan:
     runs-on: ubuntu-latest
