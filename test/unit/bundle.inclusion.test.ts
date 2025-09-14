@@ -1,0 +1,347 @@
+import { expect } from 'chai';
+import { ethers } from 'ethers';
+import { BundleBuilder, EnhancedJitBundle } from '../../src/bundler/bundleBuilder';
+import { PendingSwapDetected } from '../../src/watcher/mempoolWatcher';
+import { JitParameters } from '../../src/watcher/simulator';
+
+describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
+  let bundleBuilder: BundleBuilder;
+  let mockProvider: any;
+  let mockWallet: any;
+
+  beforeEach(() => {
+    // Create mock provider
+    mockProvider = {
+      getBlockNumber: async () => 18000000,
+      getNetwork: async () => ({ chainId: 1 }),
+      getBlock: async () => ({
+        baseFeePerGas: ethers.utils.parseUnits('20', 'gwei')
+      })
+    };
+
+    // Create mock wallet
+    const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111';
+    mockWallet = new ethers.Wallet(privateKey);
+    
+    bundleBuilder = new BundleBuilder(privateKey, mockProvider as any);
+    (bundleBuilder as any).wallet = mockWallet;
+    (bundleBuilder as any).provider = mockProvider;
+  });
+
+  describe('Enhanced JIT Bundle Creation', () => {
+    it('should build enhanced JIT bundle with victim transaction inclusion', async () => {
+      const pendingSwap: PendingSwapDetected = {
+        id: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        poolId: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8',
+        poolFeeTier: 3000,
+        tokenIn: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
+        tokenOut: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // WETH
+        amountIn: ethers.utils.parseUnits('10000', 6).toString(), // 10,000 USDC
+        amountOutEstimated: ethers.utils.parseEther('5').toString(), // ~5 ETH
+        amountUSD: '10000000000000000000000', // $10,000
+        from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
+        to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
+        rawTxHex: '0x02f8b10182033f8459682f008459682f0f8302bf2094e592427a0aece92de3edee1f18e0157c05861564872386f26fc10000b844414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb8c001a0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0a0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0',
+        calldata: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb8',
+        gasLimitEstimate: '200000',
+        timestamp: Math.floor(Date.now() / 1000)
+      };
+
+      const jitParams: JitParameters = {
+        pool: pendingSwap.poolId,
+        token0: pendingSwap.tokenIn,
+        token1: pendingSwap.tokenOut,
+        fee: pendingSwap.poolFeeTier,
+        tickLower: -1000,
+        tickUpper: 1000,
+        amount0: ethers.utils.parseUnits("500", 6).toString(), // 5,000 USDC
+        amount1: ethers.utils.parseEther("0.25").toString(), // 2.5 ETH
+        deadline: Math.floor(Date.now() / 1000) + 300
+      };
+
+      const contractAddress = '0x1234567890123456789012345678901234567890';
+      
+      const enhancedBundle = await bundleBuilder.buildEnhancedJitBundle(
+        pendingSwap,
+        jitParams,
+        contractAddress
+      );
+
+      // Validate bundle structure
+      expect(enhancedBundle).to.have.property('mintTransaction');
+      expect(enhancedBundle).to.have.property('victimTransaction');
+      expect(enhancedBundle).to.have.property('burnCollectTransaction');
+      expect(enhancedBundle).to.have.property('targetBlockNumber');
+      expect(enhancedBundle).to.have.property('bundleId');
+
+      // Validate mint transaction
+      expect(enhancedBundle.mintTransaction.to).to.equal(contractAddress);
+      expect(enhancedBundle.mintTransaction.gasLimit).to.equal('800000');
+      expect(enhancedBundle.mintTransaction.data).to.include('0x');
+
+      // Validate victim transaction
+      expect(enhancedBundle.victimTransaction.rawTxHex).to.equal(pendingSwap.rawTxHex);
+      expect(enhancedBundle.victimTransaction.hash).to.equal(pendingSwap.id);
+
+      // Validate burn/collect transaction
+      expect(enhancedBundle.burnCollectTransaction.to).to.equal(contractAddress);
+      expect(enhancedBundle.burnCollectTransaction.gasLimit).to.equal('600000');
+      expect(enhancedBundle.burnCollectTransaction.data).to.include('0x');
+
+      // Validate block targeting
+      expect(enhancedBundle.targetBlockNumber).to.equal(18000001); // current + 1
+    });
+
+    it('should handle gas price optimization for bundle transactions', async () => {
+      const mockBaseFee = ethers.utils.parseUnits('25', 'gwei');
+      mockProvider.getBlock = async () => ({ baseFeePerGas: mockBaseFee });
+
+      const competitiveGasPrice = await (bundleBuilder as any).getCompetitiveGasPrice();
+
+      expect(competitiveGasPrice.maxPriorityFeePerGas).to.equal(ethers.utils.parseUnits('3', 'gwei'));
+      
+      // maxFeePerGas should be 130% of base fee + priority fee
+      const expectedMaxFee = mockBaseFee.mul(130).div(100).add(ethers.utils.parseUnits('3', 'gwei'));
+      expect(competitiveGasPrice.maxFeePerGas).to.equal(expectedMaxFee);
+    });
+
+    it('should handle gas price fallback when provider fails', async () => {
+      mockProvider.getBlock = async () => {
+        throw new Error('Provider error');
+      };
+
+      const fallbackGasPrice = await (bundleBuilder as any).getCompetitiveGasPrice();
+
+      expect(fallbackGasPrice.maxFeePerGas).to.equal(ethers.utils.parseUnits('50', 'gwei'));
+      expect(fallbackGasPrice.maxPriorityFeePerGas).to.equal(ethers.utils.parseUnits('3', 'gwei'));
+    });
+  });
+
+  describe('Bundle Conversion to Flashbots Format', () => {
+    it('should convert enhanced bundle to Flashbots bundle format', async () => {
+      const enhancedBundle: EnhancedJitBundle = {
+        mintTransaction: {
+          to: '0x1234567890123456789012345678901234567890',
+          data: '0xabcdef',
+          gasLimit: '800000',
+          maxFeePerGas: ethers.utils.parseUnits('30', 'gwei').toString(),
+          maxPriorityFeePerGas: ethers.utils.parseUnits('3', 'gwei').toString()
+        },
+        victimTransaction: {
+          rawTxHex: '0x02f8b1...',
+          hash: '0x1234567890123456789012345678901234567890123456789012345678901234'
+        },
+        burnCollectTransaction: {
+          to: '0x1234567890123456789012345678901234567890',
+          data: '0x123456',
+          gasLimit: '600000',
+          maxFeePerGas: ethers.utils.parseUnits('30', 'gwei').toString(),
+          maxPriorityFeePerGas: ethers.utils.parseUnits('3', 'gwei').toString()
+        },
+        targetBlockNumber: 18000001,
+        bundleId: 'test-bundle-123'
+      };
+
+      // Mock wallet methods
+      mockWallet.getTransactionCount = async () => 42;
+      mockProvider.getNetwork = async () => ({ chainId: 1 });
+      mockWallet.signTransaction = async (tx: any) => `0xsigned_tx_${tx.nonce}`;
+
+      const flashbotsBundle = await bundleBuilder.convertToFlashbotsBundle(enhancedBundle);
+
+      // Validate Flashbots bundle structure
+      expect(flashbotsBundle.transactions).to.have.length(2); // mint + burn (victim inserted separately)
+      expect(flashbotsBundle.blockNumber).to.equal(18000001);
+      expect(flashbotsBundle.victimTransaction).to.exist;
+      expect(flashbotsBundle.victimTransaction!.rawTxHex).to.equal('0x02f8b1...');
+      expect(flashbotsBundle.victimTransaction!.hash).to.equal(enhancedBundle.victimTransaction.hash);
+      expect(flashbotsBundle.victimTransaction!.insertAfterIndex).to.equal(0);
+
+      // Validate signed transactions
+      expect(flashbotsBundle.transactions[0]).to.equal('0xsigned_tx_42'); // mint transaction
+      expect(flashbotsBundle.transactions[1]).to.equal('0xsigned_tx_43'); // burn transaction
+    });
+
+    it('should handle transaction signing errors gracefully', async () => {
+      const enhancedBundle: EnhancedJitBundle = {
+        mintTransaction: {
+          to: '0x1234567890123456789012345678901234567890',
+          data: '0xabcdef',
+          gasLimit: '800000',
+          maxFeePerGas: ethers.utils.parseUnits('30', 'gwei').toString(),
+          maxPriorityFeePerGas: ethers.utils.parseUnits('3', 'gwei').toString()
+        },
+        victimTransaction: {
+          rawTxHex: '0x02f8b1...',
+          hash: '0x1234567890123456789012345678901234567890123456789012345678901234'
+        },
+        burnCollectTransaction: {
+          to: '0x1234567890123456789012345678901234567890',
+          data: '0x123456',
+          gasLimit: '600000',
+          maxFeePerGas: ethers.utils.parseUnits('30', 'gwei').toString(),
+          maxPriorityFeePerGas: ethers.utils.parseUnits('3', 'gwei').toString()
+        },
+        targetBlockNumber: 18000001,
+        bundleId: 'test-bundle-123'
+      };
+
+      // Mock wallet to throw error
+      mockWallet.getTransactionCount = async () => 42;
+      mockProvider.getNetwork = async () => ({ chainId: 1 });
+      mockWallet.signTransaction = async () => {
+        throw new Error('Signing failed');
+      };
+
+      try {
+        await bundleBuilder.convertToFlashbotsBundle(enhancedBundle);
+        expect.fail('Should have thrown an error');
+      } catch (error: any) {
+        expect(error.message).to.include('Signing failed');
+      }
+    });
+  });
+
+  describe('Legacy Bundle Support', () => {
+    it('should build legacy bundle format for backward compatibility', async () => {
+      const pendingSwap = {
+        hash: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
+        to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
+        value: '0',
+        data: '0x414bf389...',
+        gasPrice: ethers.utils.parseUnits('20', 'gwei').toString(),
+        gasLimit: '200000',
+        nonce: 42,
+        pool: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8',
+        tokenIn: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        tokenOut: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+        amountIn: ethers.utils.parseUnits('10000', 6).toString(),
+        amountOutMinimum: ethers.utils.parseEther('5').toString(),
+        expectedPrice: '0',
+        estimatedProfit: '0',
+        rawTransaction: '0x02f8b1...'
+      };
+
+      const jitParams: JitParameters = {
+        pool: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8',
+        token0: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        token1: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+        fee: 3000,
+        tickLower: -1000,
+        tickUpper: 1000,
+        amount0: ethers.utils.parseUnits("500", 6).toString(),
+        amount1: ethers.utils.parseEther("0.25").toString(),
+        deadline: Math.floor(Date.now() / 1000) + 300
+      };
+
+      const contractAddress = '0x1234567890123456789012345678901234567890';
+
+      // Mock wallet signing
+      mockWallet.signTransaction = async () => '0xsigned_legacy_tx';
+
+      const legacyBundle = await bundleBuilder.buildJitBundle(
+        pendingSwap,
+        jitParams,
+        contractAddress
+      );
+
+      expect(legacyBundle.transactions).to.have.length(1);
+      expect(legacyBundle.blockNumber).to.equal(18000001);
+      expect(legacyBundle.transactions[0]).to.equal('0xsigned_legacy_tx');
+      expect(legacyBundle.victimTransaction).to.be.undefined; // Legacy format doesn't include victim tx
+    });
+  });
+
+  describe('Transaction Building', () => {
+    it('should encode JIT mint transaction correctly', async () => {
+      const pendingSwap: PendingSwapDetected = {
+        id: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        poolId: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8',
+        poolFeeTier: 3000,
+        tokenIn: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        tokenOut: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+        amountIn: ethers.utils.parseUnits('1000', 6).toString(),
+        amountOutEstimated: '0',
+        amountUSD: '1000000000000000000000',
+        from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
+        to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
+        rawTxHex: '0x02f8b1...',
+        calldata: '0x414bf389...',
+        gasLimitEstimate: '200000',
+        timestamp: Math.floor(Date.now() / 1000)
+      };
+
+      const jitParams: JitParameters = {
+        pool: pendingSwap.poolId,
+        token0: pendingSwap.tokenIn,
+        token1: pendingSwap.tokenOut,
+        fee: pendingSwap.poolFeeTier,
+        tickLower: -1000,
+        tickUpper: 1000,
+        amount0: ethers.utils.parseUnits("500", 6).toString(),
+        amount1: ethers.utils.parseEther("0.25").toString(),
+        deadline: Math.floor(Date.now() / 1000) + 300
+      };
+
+      const contractAddress = '0x1234567890123456789012345678901234567890';
+
+      const mintTx = await (bundleBuilder as any).buildJitMintTransaction(
+        pendingSwap,
+        jitParams,
+        contractAddress
+      );
+
+      expect(mintTx.to).to.equal(contractAddress);
+      expect(mintTx.gasLimit).to.equal('800000');
+      expect(mintTx.data).to.include('0x'); // Should contain encoded function call
+      expect(mintTx.maxFeePerGas).to.be.a('string');
+      expect(mintTx.maxPriorityFeePerGas).to.be.a('string');
+    });
+
+    it('should encode JIT burn/collect transaction correctly', async () => {
+      const pendingSwap: PendingSwapDetected = {
+        id: '0x1234567890123456789012345678901234567890123456789012345678901234',
+        poolId: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8',
+        poolFeeTier: 3000,
+        tokenIn: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        tokenOut: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+        amountIn: ethers.utils.parseUnits('1000', 6).toString(),
+        amountOutEstimated: '0',
+        amountUSD: '1000000000000000000000',
+        from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
+        to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
+        rawTxHex: '0x02f8b1...',
+        calldata: '0x414bf389...',
+        gasLimitEstimate: '200000',
+        timestamp: Math.floor(Date.now() / 1000)
+      };
+
+      const jitParams: JitParameters = {
+        pool: pendingSwap.poolId,
+        token0: pendingSwap.tokenIn,
+        token1: pendingSwap.tokenOut,
+        fee: pendingSwap.poolFeeTier,
+        tickLower: -1000,
+        tickUpper: 1000,
+        amount0: ethers.utils.parseUnits("500", 6).toString(),
+        amount1: ethers.utils.parseEther("0.25").toString(),
+        deadline: Math.floor(Date.now() / 1000) + 300
+      };
+
+      const contractAddress = '0x1234567890123456789012345678901234567890';
+
+      const burnTx = await (bundleBuilder as any).buildJitBurnCollectTransaction(
+        pendingSwap,
+        jitParams,
+        contractAddress
+      );
+
+      expect(burnTx.to).to.equal(contractAddress);
+      expect(burnTx.gasLimit).to.equal('600000');
+      expect(burnTx.data).to.include('0x'); // Should contain encoded function call
+      expect(burnTx.maxFeePerGas).to.be.a('string');
+      expect(burnTx.maxPriorityFeePerGas).to.be.a('string');
+    });
+  });
+});

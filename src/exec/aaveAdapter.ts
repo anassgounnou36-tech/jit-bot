@@ -14,10 +14,17 @@ export class AaveAdapter {
 
   // Aave V3 Mainnet addresses
   private static readonly POOL_ADDRESS = '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2';
-  // private static readonly POOL_ADDRESSES_PROVIDER = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e';
+  private static readonly POOL_ADDRESSES_PROVIDER = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e';
   
-  // Standard Aave V3 fee: 0.05%
-  private static readonly FLASHLOAN_FEE_PERCENTAGE = 5; // 0.05% = 5/10000
+  // Fallback fee if unable to read from protocol: 0.05%
+  private static readonly FALLBACK_FLASHLOAN_FEE_PERCENTAGE = 5; // 0.05% = 5/10000
+  
+  // Cache for flashloan premium to avoid repeated on-chain calls
+  private flashloanPremiumCache?: {
+    value: number;
+    timestamp: number;
+    ttl: number;
+  };
 
   constructor(provider: ethers.providers.Provider) {
     this.logger = getLogger().child({ component: 'aave-adapter' });
@@ -49,10 +56,143 @@ export class AaveAdapter {
   }
 
   /**
-   * Get fee in basis points (Aave charges 0.05% = 5 basis points)
+   * Get fee in basis points (dynamically from Aave protocol)
+   * Synchronous wrapper for backward compatibility
    */
   feeBps(): number {
-    return 5;
+    // Return fallback for synchronous calls
+    return AaveAdapter.FALLBACK_FLASHLOAN_FEE_PERCENTAGE;
+  }
+
+  /**
+   * Get fee in basis points (dynamically from Aave protocol) - async version
+   */
+  async feeBpsAsync(): Promise<number> {
+    return await this.getFlashloanPremium();
+  }
+
+  /**
+   * Get flashloan premium dynamically from Aave protocol configuration
+   */
+  async getFlashloanPremium(): Promise<number> {
+    try {
+      // Check cache first
+      if (this.flashloanPremiumCache) {
+        const now = Date.now();
+        if (now - this.flashloanPremiumCache.timestamp < this.flashloanPremiumCache.ttl) {
+          this.logger.debug({
+            msg: 'Using cached flashloan premium',
+            premium: this.flashloanPremiumCache.value
+          });
+          return this.flashloanPremiumCache.value;
+        }
+      }
+
+      // In test/simulation mode, return fallback value
+      if (this.isTestOrSimulationMode()) {
+        return AaveAdapter.FALLBACK_FLASHLOAN_FEE_PERCENTAGE;
+      }
+
+      // Query Aave protocol configuration for current flashloan premium
+      const premium = await this.queryFlashloanPremiumFromProtocol();
+      
+      // Cache the result for 5 minutes
+      this.flashloanPremiumCache = {
+        value: premium,
+        timestamp: Date.now(),
+        ttl: 5 * 60 * 1000 // 5 minutes
+      };
+
+      this.logger.debug({
+        msg: 'Updated flashloan premium from Aave protocol',
+        premium,
+        cached: true
+      });
+
+      return premium;
+    } catch (error: any) {
+      this.logger.warn({
+        msg: 'Failed to get dynamic flashloan premium, using fallback',
+        error: error.message,
+        fallbackPremium: AaveAdapter.FALLBACK_FLASHLOAN_FEE_PERCENTAGE
+      });
+      
+      return AaveAdapter.FALLBACK_FLASHLOAN_FEE_PERCENTAGE;
+    }
+  }
+
+  /**
+   * Query flashloan premium from Aave protocol configuration
+   */
+  private async queryFlashloanPremiumFromProtocol(): Promise<number> {
+    try {
+      // Aave Pool ABI for configuration
+      const poolAbi = [
+        'function FLASHLOAN_PREMIUM_TOTAL() external view returns (uint128)',
+        'function FLASHLOAN_PREMIUM_TO_PROTOCOL() external view returns (uint128)'
+      ];
+
+      const pool = new ethers.Contract(AaveAdapter.POOL_ADDRESS, poolAbi, this.provider);
+      
+      // Get total flashloan premium (in basis points)
+      const premiumTotal = await pool.FLASHLOAN_PREMIUM_TOTAL();
+      
+      this.logger.debug({
+        msg: 'Retrieved flashloan premium from Aave protocol',
+        premiumTotal: premiumTotal.toString(),
+        premiumBps: premiumTotal.toNumber()
+      });
+
+      return premiumTotal.toNumber(); // Returns basis points (e.g., 5 for 0.05%)
+    } catch (error: any) {
+      this.logger.warn({
+        msg: 'Failed to query flashloan premium from protocol',
+        error: error.message
+      });
+      
+      // Try alternative method using PoolAddressesProvider
+      return await this.queryPremiumFromAddressesProvider();
+    }
+  }
+
+  /**
+   * Alternative method to get premium via PoolAddressesProvider
+   */
+  private async queryPremiumFromAddressesProvider(): Promise<number> {
+    try {
+      const providerAbi = [
+        'function getPool() external view returns (address)',
+        'function getPoolConfigurator() external view returns (address)'
+      ];
+
+      const addressesProvider = new ethers.Contract(
+        AaveAdapter.POOL_ADDRESSES_PROVIDER, 
+        providerAbi, 
+        this.provider
+      );
+      
+      const poolAddress = await addressesProvider.getPool();
+      
+      // Verify we have the correct pool address
+      if (poolAddress.toLowerCase() === AaveAdapter.POOL_ADDRESS.toLowerCase()) {
+        this.logger.debug({
+          msg: 'Verified Aave pool address via AddressesProvider',
+          poolAddress
+        });
+        
+        // Return fallback since we can't get the premium directly
+        return AaveAdapter.FALLBACK_FLASHLOAN_FEE_PERCENTAGE;
+      }
+      
+      throw new Error('Pool address mismatch');
+    } catch (error: any) {
+      this.logger.warn({
+        msg: 'Alternative premium query failed',
+        error: error.message
+      });
+      
+      throw error;
+    }
   }
 
   /**
@@ -180,34 +320,39 @@ export class AaveAdapter {
   }
 
   /**
-   * Calculate Aave flashloan fee
+   * Calculate Aave flashloan fee with dynamic premium
    */
   async calculateFlashloanFee(token: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
     try {
       // Normalize token address
       const normalizedToken = ensureAddress(token, { simulationMode: this.isTestOrSimulationMode() });
       
-      // Aave V3 standard fee is 0.05%
-      const fee = amount.mul(AaveAdapter.FLASHLOAN_FEE_PERCENTAGE).div(10000);
+      // Get dynamic flashloan premium from protocol
+      const premiumBps = await this.getFlashloanPremium();
+      
+      // Calculate fee: amount * premium / 10000
+      const fee = amount.mul(premiumBps).div(10000);
       
       this.logger.debug({
-        msg: 'Calculated Aave flashloan fee',
+        msg: 'Calculated Aave flashloan fee with dynamic premium',
         token: normalizedToken,
         amount: ethers.utils.formatEther(amount),
         fee: ethers.utils.formatEther(fee),
-        feePercentage: `${AaveAdapter.FLASHLOAN_FEE_PERCENTAGE / 100}%`
+        premiumBps,
+        feePercentage: `${premiumBps / 100}%`
       });
 
       return fee;
     } catch (error: any) {
       this.logger.warn({
-        msg: 'Failed to calculate Aave flashloan fee',
+        msg: 'Failed to calculate Aave flashloan fee, using fallback',
         token,
         error: error.message
       });
       
-      // Return conservative estimate
-      return amount.mul(5).div(10000); // 0.05%
+      // Fallback calculation with static premium
+      const fallbackFee = amount.mul(AaveAdapter.FALLBACK_FLASHLOAN_FEE_PERCENTAGE).div(10000);
+      return fallbackFee;
     }
   }
 

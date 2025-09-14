@@ -1,12 +1,19 @@
 import { ethers } from 'ethers';
-import { PendingSwap } from '../watcher/mempoolWatcher';
+import { PendingSwap, PendingSwapDetected } from '../watcher/mempoolWatcher';
 import { JitParameters } from '../watcher/simulator';
+import { getLogger } from '../logging/logger';
 
 export interface FlashbotsBundle {
   transactions: string[];
   blockNumber: number;
   minTimestamp?: number;
   maxTimestamp?: number;
+  // Enhanced bundle with victim transaction support
+  victimTransaction?: {
+    rawTxHex: string;
+    hash: string;
+    insertAfterIndex: number; // Position to insert victim tx in bundle
+  };
 }
 
 export interface BundleTransaction {
@@ -19,21 +26,292 @@ export interface BundleTransaction {
   maxPriorityFeePerGas?: string;
 }
 
+export interface EnhancedJitBundle {
+  mintTransaction: BundleTransaction;
+  victimTransaction: {
+    rawTxHex: string;
+    hash: string;
+  };
+  burnCollectTransaction: BundleTransaction;
+  targetBlockNumber: number;
+  bundleId: string;
+}
+
 export class BundleBuilder {
   private wallet: ethers.Wallet;
   private provider: ethers.providers.JsonRpcProvider;
+  private logger: any;
 
   constructor(privateKey: string, provider: ethers.providers.JsonRpcProvider) {
     this.wallet = new ethers.Wallet(privateKey, provider);
     this.provider = provider;
+    this.logger = getLogger().child({ component: 'bundle-builder' });
   }
 
+  /**
+   * Build enhanced JIT bundle with victim transaction inclusion
+   * Strict ordering: [JIT mint/flashloan trigger] → [victim raw signed tx] → [JIT burn/collect/repay]
+   */
+  async buildEnhancedJitBundle(
+    pendingSwap: PendingSwapDetected,
+    jitParams: JitParameters,
+    contractAddress: string
+  ): Promise<EnhancedJitBundle> {
+    const bundleId = `bundle_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+    
+    this.logger.info({
+      msg: 'Building enhanced JIT bundle with victim transaction',
+      swapId: pendingSwap.id,
+      bundleId,
+      poolId: pendingSwap.poolId,
+      amountUSD: pendingSwap.amountUSD
+    });
+
+    try {
+      const currentBlock = await this.provider.getBlockNumber();
+      const targetBlock = currentBlock + 1;
+
+      // Step 1: Build JIT mint/flashloan trigger transaction
+      const mintTransaction = await this.buildJitMintTransaction(
+        pendingSwap,
+        jitParams,
+        contractAddress
+      );
+
+      // Step 2: Prepare victim transaction (raw signed tx bytes)
+      const victimTransaction = {
+        rawTxHex: pendingSwap.rawTxHex,
+        hash: pendingSwap.id
+      };
+
+      // Step 3: Build JIT burn/collect/repay transaction
+      const burnCollectTransaction = await this.buildJitBurnCollectTransaction(
+        pendingSwap,
+        jitParams,
+        contractAddress
+      );
+
+      const enhancedBundle: EnhancedJitBundle = {
+        mintTransaction,
+        victimTransaction,
+        burnCollectTransaction,
+        targetBlockNumber: targetBlock,
+        bundleId
+      };
+
+      this.logger.info({
+        msg: 'Enhanced JIT bundle built successfully',
+        bundleId,
+        targetBlock,
+        mintGasLimit: mintTransaction.gasLimit,
+        burnGasLimit: burnCollectTransaction.gasLimit,
+        victimTxHash: victimTransaction.hash
+      });
+
+      return enhancedBundle;
+
+    } catch (error: any) {
+      this.logger.error({
+        err: error,
+        msg: 'Failed to build enhanced JIT bundle',
+        swapId: pendingSwap.id,
+        bundleId
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Build JIT mint/flashloan trigger transaction (first in bundle)
+   */
+  private async buildJitMintTransaction(
+    pendingSwap: PendingSwapDetected,
+    _jitParams: JitParameters,
+    contractAddress: string
+  ): Promise<BundleTransaction> {
+    this.logger.debug({
+      msg: 'Building JIT mint transaction',
+      swapId: pendingSwap.id,
+      poolId: pendingSwap.poolId
+    });
+
+    // Encode the flashloan trigger call that will mint JIT position
+    const iface = new ethers.utils.Interface([
+      'function executeJitMint(address pool, address tokenIn, address tokenOut, uint24 fee, int24 tickLower, int24 tickUpper, uint256 flashloanAmount, uint256 minProfit, bytes calldata victimTxData) external'
+    ]);
+
+    const flashloanAmount = ethers.BigNumber.from(pendingSwap.amountIn)
+      .mul(110).div(100); // 110% of swap amount for liquidity
+
+    const data = iface.encodeFunctionData('executeJitMint', [
+      pendingSwap.poolId,
+      pendingSwap.tokenIn,
+      pendingSwap.tokenOut,
+      pendingSwap.poolFeeTier,
+      _jitParams.tickLower,
+      _jitParams.tickUpper,
+      flashloanAmount,
+      ethers.utils.parseEther('0.01'), // minProfit: $0.01 equivalent
+      pendingSwap.calldata
+    ]);
+
+    // Get competitive gas pricing
+    const gasPrice = await this.getCompetitiveGasPrice();
+
+    return {
+      to: contractAddress,
+      data,
+      value: '0',
+      gasLimit: '800000', // High gas limit for flashloan + mint
+      maxFeePerGas: gasPrice.maxFeePerGas.toString(),
+      maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas.toString()
+    };
+  }
+
+  /**
+   * Build JIT burn/collect/repay transaction (third in bundle, after victim)
+   */
+  private async buildJitBurnCollectTransaction(
+    pendingSwap: PendingSwapDetected,
+    _jitParams: JitParameters,
+    contractAddress: string
+  ): Promise<BundleTransaction> {
+    this.logger.debug({
+      msg: 'Building JIT burn/collect transaction',
+      swapId: pendingSwap.id,
+      poolId: pendingSwap.poolId
+    });
+
+    // Encode the burn/collect/repay call
+    const iface = new ethers.utils.Interface([
+      'function executeJitBurnCollect(uint256 tokenId, uint128 liquidity, uint256 flashloanRepayAmount, address profitRecipient) external'
+    ]);
+
+    const flashloanRepayAmount = ethers.BigNumber.from(pendingSwap.amountIn)
+      .mul(110).div(100); // Match the flashloan amount
+
+    const data = iface.encodeFunctionData('executeJitBurnCollect', [
+      0, // tokenId - will be set dynamically in contract
+      0, // liquidity - will be calculated dynamically
+      flashloanRepayAmount,
+      this.wallet.address // profit recipient
+    ]);
+
+    // Use same gas price as mint transaction for bundle consistency
+    const gasPrice = await this.getCompetitiveGasPrice();
+
+    return {
+      to: contractAddress,
+      data,
+      value: '0',
+      gasLimit: '600000', // Gas for burn + collect + repay
+      maxFeePerGas: gasPrice.maxFeePerGas.toString(),
+      maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas.toString()
+    };
+  }
+
+  /**
+   * Get competitive gas pricing for bundle transactions
+   */
+  private async getCompetitiveGasPrice(): Promise<{
+    maxFeePerGas: ethers.BigNumber;
+    maxPriorityFeePerGas: ethers.BigNumber;
+  }> {
+    try {
+      const block = await this.provider.getBlock('latest');
+      const baseFeePerGas = block.baseFeePerGas || ethers.utils.parseUnits('20', 'gwei');
+      
+      // Aggressive pricing for MEV bundles
+      const maxPriorityFeePerGas = ethers.utils.parseUnits('3', 'gwei'); // 3 gwei priority
+      const maxFeePerGas = baseFeePerGas.mul(130).div(100).add(maxPriorityFeePerGas); // 130% base + priority
+      
+      return {
+        maxFeePerGas,
+        maxPriorityFeePerGas
+      };
+    } catch (error: any) {
+      this.logger.warn({
+        err: error,
+        msg: 'Failed to get competitive gas price, using fallback'
+      });
+      
+      // Fallback pricing
+      return {
+        maxFeePerGas: ethers.utils.parseUnits('50', 'gwei'),
+        maxPriorityFeePerGas: ethers.utils.parseUnits('3', 'gwei')
+      };
+    }
+  }
+
+  /**
+   * Convert enhanced bundle to legacy Flashbots bundle format
+   */
+  async convertToFlashbotsBundle(enhancedBundle: EnhancedJitBundle): Promise<FlashbotsBundle> {
+    this.logger.info({
+      msg: 'Converting enhanced bundle to Flashbots format',
+      bundleId: enhancedBundle.bundleId
+    });
+
+    try {
+      // Sign the JIT transactions
+      const signedMintTx = await this.wallet.signTransaction({
+        ...enhancedBundle.mintTransaction,
+        nonce: await this.wallet.getTransactionCount(),
+        type: 2, // EIP-1559
+        chainId: (await this.provider.getNetwork()).chainId
+      });
+
+      const signedBurnTx = await this.wallet.signTransaction({
+        ...enhancedBundle.burnCollectTransaction,
+        nonce: await this.wallet.getTransactionCount() + 1, // Next nonce
+        type: 2, // EIP-1559
+        chainId: (await this.provider.getNetwork()).chainId
+      });
+
+      // Bundle ordering: [mint] → [victim] → [burn/collect]
+      // Note: victim tx will be inserted by Flashbots manager at index 1
+      const bundle: FlashbotsBundle = {
+        transactions: [signedMintTx, signedBurnTx], // Victim tx inserted between these
+        blockNumber: enhancedBundle.targetBlockNumber,
+        minTimestamp: Math.floor(Date.now() / 1000),
+        maxTimestamp: Math.floor(Date.now() / 1000) + 60, // 1 minute max
+        victimTransaction: {
+          rawTxHex: enhancedBundle.victimTransaction.rawTxHex,
+          hash: enhancedBundle.victimTransaction.hash,
+          insertAfterIndex: 0 // Insert after mint transaction
+        }
+      };
+
+      this.logger.info({
+        msg: 'Bundle converted to Flashbots format',
+        bundleId: enhancedBundle.bundleId,
+        totalTransactions: 3, // mint + victim + burn
+        targetBlock: bundle.blockNumber
+      });
+
+      return bundle;
+
+    } catch (error: any) {
+      this.logger.error({
+        err: error,
+        msg: 'Failed to convert bundle to Flashbots format',
+        bundleId: enhancedBundle.bundleId
+      });
+      throw error;
+    }
+  }
+
+  // Legacy method for backward compatibility
   async buildJitBundle(
     pendingSwap: PendingSwap,
     jitParams: JitParameters,
     contractAddress: string
   ): Promise<FlashbotsBundle> {
-    console.log(`🔧 Building Flashbots bundle for swap ${pendingSwap.hash}`);
+    this.logger.info({
+      msg: 'Building legacy JIT bundle',
+      swapHash: pendingSwap.hash,
+      note: 'Consider migrating to enhanced bundle format'
+    });
 
     try {
       const currentBlock = await this.provider.getBlockNumber();
@@ -45,10 +323,7 @@ export class BundleBuilder {
       // Sign the JIT transaction
       const signedJitTx = await this.wallet.signTransaction(jitTransaction);
 
-      // The bundle should include:
-      // 1. Our JIT flash loan transaction (first)
-      // 2. The target swap transaction (included by reference or sent together)
-      
+      // Legacy bundle format (single transaction)
       const bundle: FlashbotsBundle = {
         transactions: [signedJitTx],
         blockNumber: targetBlock,
@@ -56,11 +331,19 @@ export class BundleBuilder {
         maxTimestamp: Math.floor(Date.now() / 1000) + 60 // 1 minute max
       };
 
-      console.log(`✅ Bundle built for block ${targetBlock}`);
+      this.logger.info({
+        msg: 'Legacy bundle built',
+        targetBlock,
+        transactionCount: bundle.transactions.length
+      });
+
       return bundle;
 
-    } catch (error) {
-      console.error('❌ Failed to build bundle:', error);
+    } catch (error: any) {
+      this.logger.error({
+        err: error,
+        msg: 'Failed to build legacy bundle'
+      });
       throw error;
     }
   }

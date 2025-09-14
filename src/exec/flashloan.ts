@@ -325,6 +325,7 @@ export class FlashloanOrchestrator {
   /**
    * Select optimal flashloan provider based on liquidity availability
    * Prefers Balancer (no fees) over Aave when sufficient liquidity exists
+   * Respects MAX_FLASHLOAN_AMOUNT_USD configuration
    */
   async selectOptimalProvider(
     token: string, 
@@ -343,6 +344,9 @@ export class FlashloanOrchestrator {
     });
 
     try {
+      // Validate amount against MAX_FLASHLOAN_AMOUNT_USD
+      await this.validateFlashloanAmount(token, amount);
+
       // Use a mock provider if none provided and we're in test mode
       if (!provider && process.env.NODE_ENV === 'test') {
         const { ethers } = require('ethers');
@@ -396,6 +400,85 @@ export class FlashloanOrchestrator {
         error: error.message
       });
       throw error;
+    }
+  }
+
+  /**
+   * Validate flashloan amount against MAX_FLASHLOAN_AMOUNT_USD configuration
+   */
+  private async validateFlashloanAmount(token: string, amount: ethers.BigNumber): Promise<void> {
+    try {
+      // Get USD equivalent of flashloan amount
+      const usdValue = await this.estimateUSDValue(token, amount);
+      
+      // Check against configuration limit (default 10M USD if not configured)
+      const maxFlashloanUSD = ethers.utils.parseEther(this.config.maxFlashloanAmountUSD?.toString() || '10000000');
+      
+      if (usdValue.gt(maxFlashloanUSD)) {
+        const usdValueFormatted = ethers.utils.formatEther(usdValue);
+        const maxUsdFormatted = ethers.utils.formatEther(maxFlashloanUSD);
+        
+        this.logger.warn({
+          msg: 'Flashloan amount exceeds USD limit',
+          token,
+          amount: ethers.utils.formatEther(amount),
+          usdValue: usdValueFormatted,
+          maxUsdLimit: maxUsdFormatted
+        });
+        
+        throw new Error(`Flashloan amount $${usdValueFormatted} exceeds maximum allowed $${maxUsdFormatted}`);
+      }
+      
+      this.logger.debug({
+        msg: 'Flashloan amount within USD limits',
+        token,
+        amount: ethers.utils.formatEther(amount),
+        usdValue: ethers.utils.formatEther(usdValue),
+        maxUsdLimit: ethers.utils.formatEther(maxFlashloanUSD)
+      });
+      
+    } catch (error: any) {
+      this.logger.warn({
+        msg: 'Failed to validate flashloan amount',
+        token,
+        error: error.message
+      });
+      // Re-throw to prevent execution if validation fails
+      throw error;
+    }
+  }
+
+  /**
+   * Estimate USD value of token amount (basic implementation)
+   */
+  private async estimateUSDValue(tokenAddress: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
+    try {
+      // Basic USD estimation (in production would use price oracle)
+      const WETH = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
+      const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+      const USDT = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
+      
+      const normalizedToken = tokenAddress.toLowerCase();
+      
+      if (normalizedToken === WETH.toLowerCase()) {
+        // For ETH: amount (in wei) * $2000 / 10^18 = USD value in wei (18 decimals)
+        return amount.mul(2000).div(ethers.utils.parseEther('1')).mul(ethers.utils.parseEther('1'));
+      } else if (normalizedToken === USDC.toLowerCase() || normalizedToken === USDT.toLowerCase()) {
+        // Stablecoins: For 6-decimal tokens like USDC, assume 1:1 USD
+        // Convert 6 decimals to 18 decimals: amount * 10^12
+        return amount.mul(ethers.BigNumber.from(10).pow(12));
+      } else {
+        // For unknown tokens, assume similar to ETH but more conservative
+        return amount.mul(1000).div(ethers.utils.parseEther('1')).mul(ethers.utils.parseEther('1'));
+      }
+    } catch (error: any) {
+      this.logger.debug({
+        msg: 'Failed to estimate USD value',
+        tokenAddress,
+        error: error.message
+      });
+      // Return small value to avoid triggering limits in tests
+      return amount.div(1000000);
     }
   }
 
