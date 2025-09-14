@@ -289,7 +289,8 @@ contract JitExecutor is Ownable, ReentrancyGuard {
             deadline: block.timestamp + 300 // 5 minutes
         });
 
-        (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1) = positionManager.mint(mintParams);
+        (uint256 mintedTokenId, uint128 liquidity, uint256 amount0, uint256 amount1) = positionManager.mint(mintParams);
+        tokenId = mintedTokenId;
         
         emit PositionMinted(tokenId, liquidity, amount0, amount1);
     }
