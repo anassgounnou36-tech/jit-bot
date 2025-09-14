@@ -46,7 +46,7 @@ export class BalancerAdapter {
   }
 
   /**
-   * Check if Balancer has sufficient liquidity for a flashloan
+   * Enhanced on-chain liquidity check using Balancer Vault interface
    */
   async hassufficientLiquidity(token: string, amount: ethers.BigNumber): Promise<boolean> {
     try {
@@ -70,18 +70,18 @@ export class BalancerAdapter {
         return sufficient;
       }
 
-      // Query Balancer Vault for token balance
-      const vaultBalance = await this.getVaultTokenBalance(normalizedToken);
+      // Enhanced on-chain check using actual Vault interfaces
+      const availableLiquidity = await this.getActualVaultLiquidity(normalizedToken);
       
       this.logger.debug({
-        msg: 'Checking Balancer vault liquidity',
+        msg: 'Checking Balancer vault liquidity (on-chain)',
         token: normalizedToken,
         requestedAmount: ethers.utils.formatEther(amount),
-        vaultBalance: ethers.utils.formatEther(vaultBalance),
-        sufficient: vaultBalance.gte(amount)
+        availableLiquidity: ethers.utils.formatEther(availableLiquidity),
+        sufficient: availableLiquidity.gte(amount)
       });
 
-      return vaultBalance.gte(amount);
+      return availableLiquidity.gte(amount);
     } catch (error: any) {
       this.logger.warn({
         msg: 'Failed to check Balancer vault liquidity',
@@ -89,6 +89,68 @@ export class BalancerAdapter {
         error: error.message
       });
       return false;
+    }
+  }
+
+  /**
+   * Get actual vault liquidity using on-chain calls to Balancer Vault
+   */
+  private async getActualVaultLiquidity(token: string): Promise<ethers.BigNumber> {
+    try {
+      // Enhanced Balancer Vault ABI with proper interface methods
+      const vaultAbi = [
+        'function getPoolTokenInfo(bytes32 poolId, address token) external view returns (uint256 cash, uint256 managed, uint256 lastChangeBlock, address assetManager)',
+        'function getInternalBalance(address user, address[] memory tokens) external view returns (uint256[] memory)',
+        'function hasApprovedRelayer(address user, address relayer) external view returns (bool)'
+      ];
+
+      const vault = new ethers.Contract(BalancerAdapter.VAULT_ADDRESS, vaultAbi, this.provider);
+      
+      // Try to get internal balance first (available for flashloans)
+      try {
+        const internalBalances = await vault.getInternalBalance(BalancerAdapter.VAULT_ADDRESS, [token]);
+        const internalBalance = internalBalances[0] || ethers.BigNumber.from(0);
+        
+        if (internalBalance.gt(0)) {
+          this.logger.debug({
+            msg: 'Found Balancer internal balance',
+            token,
+            internalBalance: ethers.utils.formatEther(internalBalance)
+          });
+          return internalBalance;
+        }
+      } catch (error: any) {
+        this.logger.debug({
+          msg: 'Internal balance check failed, trying alternative methods',
+          token,
+          error: error.message
+        });
+      }
+
+      // Alternative: Check token balance of vault directly
+      const tokenContract = new ethers.Contract(token, [
+        'function balanceOf(address account) external view returns (uint256)'
+      ], this.provider);
+      
+      const vaultBalance = await tokenContract.balanceOf(BalancerAdapter.VAULT_ADDRESS);
+      
+      this.logger.debug({
+        msg: 'Using Balancer vault token balance',
+        token,
+        vaultBalance: ethers.utils.formatEther(vaultBalance)
+      });
+      
+      return vaultBalance;
+      
+    } catch (error: any) {
+      this.logger.warn({
+        msg: 'Failed to get actual Balancer vault liquidity',
+        token,
+        error: error.message
+      });
+      
+      // Return conservative fallback
+      return ethers.BigNumber.from(0);
     }
   }
 
