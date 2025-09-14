@@ -124,13 +124,20 @@ export async function runPreflightSimulation(params: ForkSimulationParams): Prom
   });
 
   try {
-    // Step 1: Validate pool state and basic parameters
+    // Step 1: Validate gas parameters FIRST (before pool validation)
+    const config = getConfig();
+    const gasValidation = validateGasParameters(params, config);
+    if (!gasValidation) {
+      return createFailedPreflightResult('Gas validation failed', logger);
+    }
+
+    // Step 2: Validate pool state and basic parameters
     const poolValidation = await validatePoolForPreflight(params.poolAddress, params.blockNumber);
     if (!poolValidation) {
       return createFailedPreflightResult('Pool validation failed', logger);
     }
 
-    // Step 2: Validate flashloan parameters
+    // Step 3: Validate flashloan parameters
     const flashloanOrchestrator = getFlashloanOrchestrator();
     const flashloanValidation = await flashloanOrchestrator.validateFlashloanParams(
       params.swapTokenIn,
@@ -144,16 +151,10 @@ export async function runPreflightSimulation(params: ForkSimulationParams): Prom
       );
     }
 
-    // Step 3: Validate liquidity and position parameters
+    // Step 4: Validate liquidity and position parameters
     const liquidityValidation = await validateLiquidityParameters(params);
     if (!liquidityValidation) {
       return createFailedPreflightResult('Liquidity validation failed', logger);
-    }
-
-    // Step 4: Validate gas parameters
-    const gasValidation = validateGasParameters(params, config);
-    if (!gasValidation) {
-      return createFailedPreflightResult('Gas validation failed', logger);
     }
 
     // Step 5: Run full sequence simulation
