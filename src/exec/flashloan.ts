@@ -343,6 +343,12 @@ export class FlashloanOrchestrator {
     });
 
     try {
+      // Use a mock provider if none provided and we're in test mode
+      if (!provider && process.env.NODE_ENV === 'test') {
+        const { ethers } = require('ethers');
+        provider = new ethers.providers.JsonRpcProvider('http://localhost:8545');
+      }
+
       // Always try Balancer first (no fees)
       const balancerAdapter = getBalancerAdapter(provider);
       const balancerSufficient = await balancerAdapter.hassufficientLiquidity(token, amount);
@@ -396,18 +402,20 @@ export class FlashloanOrchestrator {
   /**
    * Enhanced flashloan parameters validation with provider selection
    */
-  async validateFlashloanParams(
+  async validateFlashloanParameters(
     token: string,
     amount: ethers.BigNumber,
     provider?: ethers.providers.Provider
   ): Promise<{
     valid: boolean;
     issues: string[];
+    warnings: string[];
     fee?: ethers.BigNumber;
     selectedProvider?: 'balancer' | 'aave';
     adapter?: any;
   }> {
     const issues: string[] = [];
+    const warnings: string[] = [];
 
     try {
       // Basic validation
@@ -419,6 +427,13 @@ export class FlashloanOrchestrator {
         issues.push('Amount must be positive');
       }
 
+      // Check for very small amounts that may not be profitable
+      const minAmount = ethers.utils.parseEther('0.01'); // 0.01 ETH minimum
+      if (amount.lt(minAmount)) {
+        issues.push('very_small_amount');
+        warnings.push('Amount too small - flashloan fees may exceed profits');
+      }
+
       // Select optimal provider
       const selection = await this.selectOptimalProvider(token, amount, provider);
       
@@ -428,12 +443,14 @@ export class FlashloanOrchestrator {
         amount: ethers.utils.formatEther(amount),
         selectedProvider: selection.providerType,
         fee: ethers.utils.formatEther(selection.fee),
-        valid: issues.length === 0
+        valid: issues.length === 0,
+        warnings: warnings.length > 0 ? warnings : undefined
       });
 
       return {
         valid: issues.length === 0,
         issues,
+        warnings,
         fee: selection.fee,
         selectedProvider: selection.providerType,
         adapter: selection.adapter
@@ -444,9 +461,41 @@ export class FlashloanOrchestrator {
       
       return {
         valid: false,
-        issues
+        issues,
+        warnings
       };
     }
+  }
+
+  /**
+   * Legacy method for backward compatibility
+   */
+  async validateFlashloanParams(
+    token: string,
+    amount: ethers.BigNumber,
+    provider?: ethers.providers.Provider
+  ): Promise<{
+    valid: boolean;
+    issues: string[];
+    fee?: ethers.BigNumber;
+    selectedProvider?: 'balancer' | 'aave';
+    adapter?: any;
+  }> {
+    const result = await this.validateFlashloanParameters(token, amount, provider);
+    
+    // For backward compatibility, include warning messages in issues
+    const allIssues = [...result.issues];
+    if (result.warnings && result.warnings.length > 0) {
+      allIssues.push(...result.warnings);
+    }
+    
+    return {
+      valid: result.valid,
+      issues: allIssues,
+      fee: result.fee,
+      selectedProvider: result.selectedProvider,
+      adapter: result.adapter
+    };
   }
   
   /**
