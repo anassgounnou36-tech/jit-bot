@@ -6,6 +6,58 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+/// @title Minimal INonfungiblePositionManager interface
+/// @notice Contains only the functions we need from Uniswap V3 Position Manager
+interface INonfungiblePositionManager {
+    struct MintParams {
+        address token0;
+        address token1;
+        uint24 fee;
+        int24 tickLower;
+        int24 tickUpper;
+        uint256 amount0Desired;
+        uint256 amount1Desired;
+        uint256 amount0Min;
+        uint256 amount1Min;
+        address recipient;
+        uint256 deadline;
+    }
+
+    struct DecreaseLiquidityParams {
+        uint256 tokenId;
+        uint128 liquidity;
+        uint256 amount0Min;
+        uint256 amount1Min;
+        uint256 deadline;
+    }
+
+    struct CollectParams {
+        uint256 tokenId;
+        address recipient;
+        uint128 amount0Max;
+        uint128 amount1Max;
+    }
+
+    function mint(MintParams calldata params) external payable returns (
+        uint256 tokenId,
+        uint128 liquidity,
+        uint256 amount0,
+        uint256 amount1
+    );
+
+    function decreaseLiquidity(DecreaseLiquidityParams calldata params) external payable returns (
+        uint256 amount0,
+        uint256 amount1
+    );
+
+    function collect(CollectParams calldata params) external payable returns (
+        uint256 amount0,
+        uint256 amount1
+    );
+
+    function burn(uint256 tokenId) external payable;
+}
+
 /// @title JitExecutor
 /// @notice Production-ready JIT executor with Balancer/Aave flashloan support and Uniswap V3 integration
 contract JitExecutor is Ownable, ReentrancyGuard {
@@ -23,60 +75,8 @@ contract JitExecutor is Ownable, ReentrancyGuard {
     /// @notice Maximum loan size
     uint256 public maxLoanSize;
 
-    /// @notice Uniswap V3 Position Manager interface
-    interface INonfungiblePositionManager {
-        struct MintParams {
-            address token0;
-            address token1;
-            uint24 fee;
-            int24 tickLower;
-            int24 tickUpper;
-            uint256 amount0Desired;
-            uint256 amount1Desired;
-            uint256 amount0Min;
-            uint256 amount1Min;
-            address recipient;
-            uint256 deadline;
-        }
-
-        struct DecreaseLiquidityParams {
-            uint256 tokenId;
-            uint128 liquidity;
-            uint256 amount0Min;
-            uint256 amount1Min;
-            uint256 deadline;
-        }
-
-        struct CollectParams {
-            uint256 tokenId;
-            address recipient;
-            uint128 amount0Max;
-            uint128 amount1Max;
-        }
-
-        function mint(MintParams calldata params) external payable returns (
-            uint256 tokenId,
-            uint128 liquidity,
-            uint256 amount0,
-            uint256 amount1
-        );
-
-        function decreaseLiquidity(DecreaseLiquidityParams calldata params) external payable returns (
-            uint256 amount0,
-            uint256 amount1
-        );
-
-        function collect(CollectParams calldata params) external payable returns (
-            uint256 amount0,
-            uint256 amount1
-        );
-
-        function burn(uint256 tokenId) external payable;
-    }
-
     /// @notice Uniswap V3 Position Manager
-    INonfungiblePositionManager public constant positionManager = 
-        INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
+    INonfungiblePositionManager public immutable positionManager;
 
     /// @notice Events
     event FlashloanRequested(address indexed provider, address indexed token, uint256 amount);
@@ -116,16 +116,20 @@ contract JitExecutor is Ownable, ReentrancyGuard {
     /// @param _minProfitThreshold Minimum profit threshold in wei
     /// @param _maxLoanSize Maximum loan size
     /// @param _profitRecipient Address to receive profits
+    /// @param _positionManager Address of Uniswap V3 Position Manager
     constructor(
         uint256 _minProfitThreshold,
         uint256 _maxLoanSize,
-        address _profitRecipient
+        address _profitRecipient,
+        address _positionManager
     ) {
         if (_profitRecipient == address(0)) revert InvalidProfitRecipient();
+        if (_positionManager == address(0)) revert("Invalid position manager address");
         
         minProfitThreshold = _minProfitThreshold;
         maxLoanSize = _maxLoanSize;
         profitRecipient = _profitRecipient;
+        positionManager = INonfungiblePositionManager(_positionManager);
     }
 
     /// @notice Modifier to check if execution is not paused

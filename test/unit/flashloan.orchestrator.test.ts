@@ -1,8 +1,8 @@
 import { expect } from 'chai';
 import { ethers } from 'ethers';
 import { FlashloanOrchestrator } from '../../src/exec/flashloan';
-import { getBalancerAdapter, resetBalancerAdapter } from '../../src/exec/balancerAdapter';
-import { getAaveAdapter, resetAaveAdapter } from '../../src/exec/aaveAdapter';
+import { resetBalancerAdapter } from '../../src/exec/balancerAdapter';
+import { resetAaveAdapter } from '../../src/exec/aaveAdapter';
 
 describe('Flashloan Orchestrator', function () {
   let orchestrator: FlashloanOrchestrator;
@@ -121,7 +121,6 @@ describe('Flashloan Orchestrator', function () {
   describe('Integration with Providers', function () {
     it('should handle provider failures gracefully', async function () {
       // Use amount that should succeed normally but test failure handling
-      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
       const amount = ethers.utils.parseEther('100');
 
       // For this test, we'll use an invalid token to trigger failure
