@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { getLogger } from '../logging/logger';
-// import { getConfig } from '../config';
+import { ensureAddress } from '../utils/address';
 
 /**
  * Balancer Flashloan Adapter
@@ -8,19 +8,26 @@ import { getLogger } from '../logging/logger';
  */
 export class BalancerAdapter {
   private logger: any;
-  // private config: any;
   private provider: ethers.providers.Provider;
 
   // Balancer Vault address (Ethereum mainnet)
   private static readonly VAULT_ADDRESS = '0xBA12222222228d8Ba445958a75a0704d566BF2C8';
   
-  // Balancer has no flashloan fees
-  // private static readonly FLASHLOAN_FEE_PERCENTAGE = 0;
+  // Simulation vault balances (keyed by token address)
+  private static simVault: Record<string, number> = {
+    '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48': parseFloat(process.env.SIM_BALANCER_USDC ?? '500')
+  };
 
   constructor(provider: ethers.providers.Provider) {
     this.logger = getLogger().child({ component: 'balancer-adapter' });
-    // this.config = getConfig();
     this.provider = provider;
+  }
+
+  /**
+   * Get fee in basis points (Balancer has no fees)
+   */
+  public static feeBps(): number { 
+    return 0; 
   }
 
   /**
@@ -28,14 +35,14 @@ export class BalancerAdapter {
    */
   async hassufficientLiquidity(token: string, amount: ethers.BigNumber): Promise<boolean> {
     try {
-      // Query Balancer Vault for token balance
       const vaultBalance = await this.getVaultTokenBalance(token);
+      const amountEther = parseFloat(ethers.utils.formatEther(amount));
       
       this.logger.debug({
         msg: 'Checking Balancer vault liquidity',
         token,
-        requestedAmount: ethers.utils.formatEther(amount),
-        vaultBalance: ethers.utils.formatEther(vaultBalance),
+        requestedAmount: amountEther,
+        vaultBalance: parseFloat(ethers.utils.formatEther(vaultBalance)),
         sufficient: vaultBalance.gte(amount)
       });
 
@@ -54,6 +61,15 @@ export class BalancerAdapter {
    * Get token balance in Balancer Vault
    */
   async getVaultTokenBalance(token: string): Promise<ethers.BigNumber> {
+    const simulationMode = process.env.NODE_ENV === 'test' || process.env.SIMULATION_MODE === 'true';
+    const normalizedToken = ensureAddress(token, { simulationMode });
+    
+    if (simulationMode) {
+      const simBalance = BalancerAdapter.simVault[normalizedToken];
+      const balance = typeof simBalance === 'number' ? simBalance : 0;
+      return ethers.utils.parseEther(balance.toString());
+    }
+
     try {
       // Balancer Vault ABI for getInternalBalance
       const vaultAbi = [
@@ -63,19 +79,28 @@ export class BalancerAdapter {
       const vault = new ethers.Contract(BalancerAdapter.VAULT_ADDRESS, vaultAbi, this.provider);
       
       // Get vault's internal balance for the token
-      const balances = await vault.getInternalBalance(BalancerAdapter.VAULT_ADDRESS, [token]);
+      const balances = await vault.getInternalBalance(BalancerAdapter.VAULT_ADDRESS, [normalizedToken]);
       
       return balances[0] || ethers.BigNumber.from(0);
     } catch (error: any) {
       this.logger.warn({
         msg: 'Failed to get Balancer vault balance',
-        token,
+        token: normalizedToken,
         error: error.message
       });
       
       // Return conservative fallback
       return ethers.BigNumber.from(0);
     }
+  }
+
+  /**
+   * Check if Balancer has liquidity for amount
+   */
+  async hasLiquidity(token: string, requestedAmount: number): Promise<boolean> {
+    const balance = await this.getVaultTokenBalance(token);
+    const balanceEther = parseFloat(ethers.utils.formatEther(balance));
+    return balanceEther >= requestedAmount;
   }
 
   /**
@@ -121,7 +146,7 @@ export class BalancerAdapter {
    * Calculate flashloan fee (Balancer has no fees)
    */
   async calculateFlashloanFee(_token: string, _amount: ethers.BigNumber): Promise<ethers.BigNumber> {
-    return ethers.BigNumber.from(0);
+    return ethers.constants.Zero;
   }
 
   /**

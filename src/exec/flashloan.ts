@@ -348,6 +348,8 @@ export class FlashloanOrchestrator {
       const balancerSufficient = await balancerAdapter.hassufficientLiquidity(token, amount);
       
       if (balancerSufficient) {
+        const balancerFee = await balancerAdapter.calculateFlashloanFee(token, amount);
+        
         this.logger.info({
           msg: 'Selected Balancer as flashloan provider',
           reason: 'Sufficient liquidity and no fees'
@@ -356,7 +358,7 @@ export class FlashloanOrchestrator {
         return {
           providerType: 'balancer',
           adapter: balancerAdapter,
-          fee: ethers.BigNumber.from(0),
+          fee: balancerFee,
           reason: 'Balancer has sufficient liquidity with no fees'
         };
       }
@@ -394,6 +396,16 @@ export class FlashloanOrchestrator {
   }
 
   /**
+   * Get minimum amount for a token
+   */
+  private static minAmount(token: string): number {
+    if (token.toLowerCase() === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48') {
+      return parseFloat(process.env.MIN_FLASHLOAN_USDC ?? '0.01');
+    }
+    return parseFloat(process.env.MIN_FLASHLOAN_DEFAULT ?? '0.01');
+  }
+
+  /**
    * Enhanced flashloan parameters validation with provider selection
    */
   async validateFlashloanParams(
@@ -417,6 +429,13 @@ export class FlashloanOrchestrator {
 
       if (amount.lte(0)) {
         issues.push('Amount must be positive');
+      }
+
+      // Check minimum amount threshold
+      const minAmt = FlashloanOrchestrator.minAmount(token);
+      const amountEther = parseFloat(ethers.utils.formatEther(amount));
+      if (amountEther < minAmt) {
+        issues.push('Flashloan amount too small, fees may exceed profits');
       }
 
       // Select optimal provider

@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { getLogger } from '../logging/logger';
 import { getConfig } from '../config';
+import { ensureAddress } from '../utils/address';
 
 /**
  * Enhanced Aave V3 Flashloan Adapter
@@ -13,10 +14,14 @@ export class AaveAdapter {
 
   // Aave V3 Mainnet addresses
   private static readonly POOL_ADDRESS = '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2';
-  // private static readonly POOL_ADDRESSES_PROVIDER = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e';
   
   // Standard Aave V3 fee: 0.05%
   private static readonly FLASHLOAN_FEE_PERCENTAGE = 5; // 0.05% = 5/10000
+
+  // Simulation liquidity (keyed by token address)
+  private static simLiquidity: Record<string, number> = {
+    '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48': parseFloat(process.env.SIM_AAVE_USDC ?? '100000')
+  };
 
   constructor(provider: ethers.providers.Provider) {
     this.logger = getLogger().child({ component: 'aave-adapter' });
@@ -30,6 +35,20 @@ export class AaveAdapter {
         note: 'Verify addresses are correct for this chain'
       });
     }
+  }
+
+  /**
+   * Get fee in basis points
+   */
+  public static feeBps(): number { 
+    return 5; 
+  }
+
+  /**
+   * Calculate fee for amount
+   */
+  public static calculateFee(amount: number): number {
+    return amount * (AaveAdapter.feeBps() / 10000);
   }
 
   /**
@@ -62,6 +81,15 @@ export class AaveAdapter {
    * Get available liquidity in Aave for a token
    */
   async getAvailableLiquidity(token: string): Promise<ethers.BigNumber> {
+    const simulationMode = process.env.NODE_ENV === 'test' || process.env.SIMULATION_MODE === 'true';
+    const normalizedToken = ensureAddress(token, { simulationMode });
+    
+    if (simulationMode) {
+      const simBalance = AaveAdapter.simLiquidity[normalizedToken];
+      const balance = typeof simBalance === 'number' ? simBalance : 0;
+      return ethers.utils.parseEther(balance.toString());
+    }
+
     try {
       // Aave Pool ABI for getReserveData
       const poolAbi = [
@@ -69,7 +97,7 @@ export class AaveAdapter {
       ];
 
       const pool = new ethers.Contract(AaveAdapter.POOL_ADDRESS, poolAbi, this.provider);
-      const reserveData = await pool.getReserveData(token);
+      const reserveData = await pool.getReserveData(normalizedToken);
       
       // Get aToken contract to check available liquidity
       const aTokenAbi = [
@@ -85,13 +113,22 @@ export class AaveAdapter {
     } catch (error: any) {
       this.logger.warn({
         msg: 'Failed to get Aave available liquidity',
-        token,
+        token: normalizedToken,
         error: error.message
       });
       
       // Return conservative fallback
       return ethers.utils.parseEther('100');
     }
+  }
+
+  /**
+   * Check if Aave has liquidity for amount
+   */
+  async hasLiquidity(token: string, requestedAmount: number): Promise<boolean> {
+    const available = await this.getAvailableLiquidity(token);
+    const availableEther = parseFloat(ethers.utils.formatEther(available));
+    return availableEther >= requestedAmount;
   }
 
   /**
