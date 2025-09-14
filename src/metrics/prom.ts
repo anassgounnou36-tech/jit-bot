@@ -28,15 +28,9 @@ const currentSimulatedProfitUsd = new Gauge({
   labelNames: ['pool']
 });
 
-const lastBundleBlockNumber = new Gauge({
-  name: 'last_bundle_block_number',
-  help: 'Block number of the last bundle submission (placeholder in PR1)',
-  labelNames: ['pool']
-});
-
 const walletBalanceEth = new Gauge({
   name: 'wallet_balance_eth',
-  help: 'Current wallet balance in ETH (placeholder in PR1)',
+  help: 'Current wallet balance in ETH',
   labelNames: []
 });
 
@@ -96,6 +90,97 @@ const simulationErrors = new Counter({
   name: 'simulation_errors_total',
   help: 'Total simulation errors',
   labelNames: ['type', 'pool']
+});
+
+// PR2: New metrics for flashbots, flashloan, and fork simulation
+const flashbotsAttemptTotal = new Counter({
+  name: 'flashbots_bundle_attempt_total',
+  help: 'Total number of Flashbots bundle attempts',
+  labelNames: ['operation'] // 'simulate' or 'submit'
+});
+
+const flashbotsSuccessTotal = new Counter({
+  name: 'flashbots_bundle_success_total',
+  help: 'Total number of successful Flashbots bundle operations',
+  labelNames: ['operation']
+});
+
+const flashbotsFailureTotal = new Counter({
+  name: 'flashbots_bundle_failure_total',
+  help: 'Total number of failed Flashbots bundle operations',
+  labelNames: ['operation', 'reason']
+});
+
+const lastBundleBlockNumber = new Gauge({
+  name: 'last_bundle_block_number',
+  help: 'Block number of the last bundle submission',
+  labelNames: []
+});
+
+const forkSimAttemptTotal = new Counter({
+  name: 'fork_sim_attempt_total',
+  help: 'Total number of fork simulation attempts',
+  labelNames: ['pool']
+});
+
+const forkSimSuccessTotal = new Counter({
+  name: 'fork_sim_success_total',
+  help: 'Total number of successful fork simulations',
+  labelNames: ['pool']
+});
+
+const forkSimFailureTotal = new Counter({
+  name: 'fork_sim_failure_total',
+  help: 'Total number of failed fork simulations',
+  labelNames: ['pool', 'reason']
+});
+
+const flashloanAttemptTotal = new Counter({
+  name: 'flashloan_attempt_total',
+  help: 'Total number of flashloan attempts',
+  labelNames: ['provider', 'token']
+});
+
+const flashloanSuccessTotal = new Counter({
+  name: 'flashloan_success_total',
+  help: 'Total number of successful flashloan operations',
+  labelNames: ['provider', 'token']
+});
+
+const flashloanFailureTotal = new Counter({
+  name: 'flashloan_failure_total',
+  help: 'Total number of failed flashloan operations',
+  labelNames: ['provider', 'token', 'reason']
+});
+
+// Performance histograms for PR2
+const flashbotsDuration = new Histogram({
+  name: 'flashbots_operation_duration_seconds',
+  help: 'Duration of Flashbots operations',
+  labelNames: ['operation'],
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 30]
+});
+
+const forkSimDuration = new Histogram({
+  name: 'fork_sim_duration_seconds',
+  help: 'Duration of fork simulation operations',
+  labelNames: ['type'],
+  buckets: [0.5, 1, 2, 5, 10, 30, 60]
+});
+
+const preflightDuration = new Histogram({
+  name: 'preflight_duration_seconds',
+  help: 'Duration of preflight simulations',
+  labelNames: ['pool'],
+  buckets: [1, 2, 5, 10, 20, 30, 60]
+});
+
+// Profitability metrics
+const expectedProfitUsd = new Histogram({
+  name: 'expected_profit_usd',
+  help: 'Expected profit in USD from successful preflights',
+  labelNames: ['pool'],
+  buckets: [1, 5, 10, 25, 50, 100, 250, 500]
 });
 
 export interface MetricsServerConfig {
@@ -241,10 +326,6 @@ export class PrometheusMetrics {
     currentSimulatedProfitUsd.set({ pool }, profitUsd);
   }
 
-  public updateLastBundleBlock(pool: string, blockNumber: number): void {
-    lastBundleBlockNumber.set({ pool }, blockNumber);
-  }
-
   public updateWalletBalance(balanceEth: number): void {
     walletBalanceEth.set(balanceEth);
   }
@@ -279,6 +360,63 @@ export class PrometheusMetrics {
 
   public recordSimulationError(type: string, pool: string): void {
     simulationErrors.inc({ type, pool });
+  }
+
+  // PR2: New metric recording methods
+  public incrementFlashbotsAttempt(operation: 'simulate' | 'submit'): void {
+    flashbotsAttemptTotal.inc({ operation });
+  }
+
+  public incrementFlashbotsSuccess(operation: 'simulate' | 'submit'): void {
+    flashbotsSuccessTotal.inc({ operation });
+  }
+
+  public incrementFlashbotsFailure(operation: 'simulate' | 'submit', reason: string): void {
+    flashbotsFailureTotal.inc({ operation, reason });
+  }
+
+  public updateLastBundleBlock(blockNumber: number): void {
+    lastBundleBlockNumber.set(blockNumber);
+  }
+
+  public incrementForkSimAttempt(pool: string): void {
+    forkSimAttemptTotal.inc({ pool });
+  }
+
+  public incrementForkSimSuccess(pool: string): void {
+    forkSimSuccessTotal.inc({ pool });
+  }
+
+  public incrementForkSimFailure(pool: string, reason: string): void {
+    forkSimFailureTotal.inc({ pool, reason });
+  }
+
+  public incrementFlashloanAttempt(provider: string, token: string): void {
+    flashloanAttemptTotal.inc({ provider, token });
+  }
+
+  public incrementFlashloanSuccess(provider: string, token: string): void {
+    flashloanSuccessTotal.inc({ provider, token });
+  }
+
+  public incrementFlashloanFailure(provider: string, token: string, reason: string): void {
+    flashloanFailureTotal.inc({ provider, token, reason });
+  }
+
+  public recordFlashbotsDuration(operation: 'simulate' | 'submit', durationSeconds: number): void {
+    flashbotsDuration.observe({ operation }, durationSeconds);
+  }
+
+  public recordForkSimDuration(type: 'preflight' | 'validation', durationSeconds: number): void {
+    forkSimDuration.observe({ type }, durationSeconds);
+  }
+
+  public recordPreflightDuration(pool: string, durationSeconds: number): void {
+    preflightDuration.observe({ pool }, durationSeconds);
+  }
+
+  public recordExpectedProfit(pool: string, profitUsd: number): void {
+    expectedProfitUsd.observe({ pool }, profitUsd);
   }
 
   // Utility methods

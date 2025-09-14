@@ -35,7 +35,13 @@ export interface JitBotConfig {
   // Runtime configuration
   nodeEnv: 'development' | 'production';
   chain: 'ethereum' | 'arbitrum';
-  simulationMode: boolean;
+  simulationMode: boolean; // Legacy, derived from !enableLiveExecution
+  
+  // PR2: Live execution control
+  enableLiveExecution: boolean;
+  enableFlashbots: boolean;
+  enableForkSimPreflight: boolean;
+  liveRiskAcknowledged: boolean;
   
   // Network configuration
   rpcUrlHttp: string;
@@ -56,10 +62,14 @@ export interface JitBotConfig {
   
   // Wallet configuration
   privateKey: string;
+  executorPrivateKey?: string;
   
-  // Flashbots configuration (not used in PR1)
+  // Flashbots configuration
   flashbotsRelayUrl: string;
   flashbotsPrivateKey?: string;
+  
+  // Flashloan configuration
+  flashloanProvider: string;
   
   // Contract addresses
   jitContractAddress?: string;
@@ -91,14 +101,33 @@ export function loadConfig(): JitBotConfig {
   // Parse environment variables
   const nodeEnv = (process.env.NODE_ENV || 'development') as 'development' | 'production';
   const chain = (process.env.CHAIN || 'ethereum') as 'ethereum' | 'arbitrum';
-  const simulationMode = process.env.SIMULATION_MODE !== 'false'; // Default to true
   
-  // Critical PR1 safety check
-  if (nodeEnv === 'production' && !simulationMode) {
-    throw new Error(
-      'CRITICAL ERROR: Live execution (SIMULATION_MODE=false) in production is not allowed in PR1. ' +
-      'This version only supports simulation mode for safety.'
-    );
+  // PR2: New live execution flags
+  const enableLiveExecution = process.env.ENABLE_LIVE_EXECUTION === 'true';
+  const enableFlashbots = process.env.ENABLE_FLASHBOTS === 'true';
+  const enableForkSimPreflight = process.env.ENABLE_FORK_SIM_PREFLIGHT !== 'false'; // Default true
+  const liveRiskAcknowledged = process.env.I_UNDERSTAND_LIVE_RISK === 'true';
+  
+  // Legacy simulation mode (derived from live execution setting)
+  const simulationMode = !enableLiveExecution;
+  
+  // Critical PR2 safety checks
+  if (enableLiveExecution) {
+    // Require Flashbots to be enabled for live execution
+    if (!enableFlashbots) {
+      throw new Error(
+        'CRITICAL ERROR: ENABLE_LIVE_EXECUTION=true requires ENABLE_FLASHBOTS=true. ' +
+        'Live execution without Flashbots is not supported for safety.'
+      );
+    }
+    
+    // Production environment requires explicit risk acknowledgment
+    if (nodeEnv === 'production' && !liveRiskAcknowledged) {
+      throw new Error(
+        'CRITICAL ERROR: Live execution in production requires I_UNDERSTAND_LIVE_RISK=true. ' +
+        'This acknowledges the risks of automated transaction execution with real funds.'
+      );
+    }
   }
   
   // Network configuration
@@ -139,19 +168,41 @@ export function loadConfig(): JitBotConfig {
     throw new Error('PRIVATE_KEY is required');
   }
   
+  const executorPrivateKey = process.env.EXECUTOR_PRIVATE_KEY;
+  
   // Validate private key format
   if (!privateKey.startsWith('0x') || privateKey.length !== 66) {
     throw new Error('PRIVATE_KEY must be a valid 32-byte hex string starting with 0x');
+  }
+  
+  if (executorPrivateKey && (!executorPrivateKey.startsWith('0x') || executorPrivateKey.length !== 66)) {
+    throw new Error('EXECUTOR_PRIVATE_KEY must be a valid 32-byte hex string starting with 0x');
   }
   
   // Flashbots configuration
   const flashbotsRelayUrl = process.env.FLASHBOTS_RELAY_URL || 'https://relay.flashbots.net';
   const flashbotsPrivateKey = process.env.FLASHBOTS_PRIVATE_KEY;
   
+  // Validate Flashbots private key if live execution is enabled
+  if (enableLiveExecution && enableFlashbots) {
+    if (!flashbotsPrivateKey) {
+      throw new Error(
+        'FLASHBOTS_PRIVATE_KEY is required when ENABLE_LIVE_EXECUTION=true and ENABLE_FLASHBOTS=true'
+      );
+    }
+    
+    if (!flashbotsPrivateKey.startsWith('0x') || flashbotsPrivateKey.length !== 66) {
+      throw new Error('FLASHBOTS_PRIVATE_KEY must be a valid 32-byte hex string starting with 0x');
+    }
+  }
+  
   // Warn about flashbots configuration in simulation mode
-  if (simulationMode && flashbotsPrivateKey) {
+  if (!enableLiveExecution && flashbotsPrivateKey) {
     console.warn('⚠️  Flashbots configuration detected but will not be used in simulation mode');
   }
+  
+  // Flashloan provider configuration
+  const flashloanProvider = process.env.FLASHLOAN_PROVIDER || 'aave-v3';
   
   // Contract configuration
   const jitContractAddress = process.env.JIT_CONTRACT_ADDRESS;
@@ -188,6 +239,10 @@ export function loadConfig(): JitBotConfig {
     nodeEnv,
     chain,
     simulationMode,
+    enableLiveExecution,
+    enableFlashbots,
+    enableForkSimPreflight,
+    liveRiskAcknowledged,
     rpcUrlHttp,
     rpcUrlWs,
     forkBlockNumber,
@@ -198,8 +253,10 @@ export function loadConfig(): JitBotConfig {
     prometheusPort,
     metricsPort,
     privateKey,
+    executorPrivateKey,
     flashbotsRelayUrl,
     flashbotsPrivateKey,
+    flashloanProvider,
     jitContractAddress,
     chainConfig,
     flashLoanProviders: jsonConfig.flashLoanProviders || {},
@@ -213,28 +270,29 @@ export function loadConfig(): JitBotConfig {
   };
   
   // Final simulation mode validation
-  validateSimulationMode(config);
+  validateLiveExecutionSafety(config);
   
   return config;
 }
 
 /**
- * Validate that simulation mode requirements are met
+ * Validate live execution safety requirements
  */
-function validateSimulationMode(config: JitBotConfig): void {
-  if (!config.simulationMode) {
-    throw new Error(
-      'SIMULATION_MODE=false is not allowed in PR1. ' +
-      'This build only supports simulation mode for safety.'
-    );
+function validateLiveExecutionSafety(config: JitBotConfig): void {
+  if (config.enableLiveExecution) {
+    console.log('⚠️  LIVE EXECUTION ENABLED - This bot will execute real transactions with real funds');
+    console.log('⚠️  Ensure you understand the risks and have tested thoroughly in simulation mode');
+    
+    if (config.nodeEnv === 'production') {
+      console.log('⚠️  PRODUCTION MODE with LIVE EXECUTION - Proceeding with extreme caution');
+    }
+  } else {
+    console.log('✅ Simulation mode active - No live execution will occur');
   }
   
-  // Additional validation for simulation mode
-  if (config.nodeEnv === 'production' && config.simulationMode) {
-    console.log('✅ Running in production environment with simulation mode enabled');
+  if (config.enableForkSimPreflight) {
+    console.log('✅ Fork simulation preflight enabled - Full validation before any execution');
   }
-  
-  console.log('✅ Simulation mode validation passed - no live execution will occur');
 }
 
 /**
@@ -260,13 +318,24 @@ export function getWallet(config: JitBotConfig, provider?: ethers.providers.Prov
 }
 
 /**
- * Validate that no live execution paths are attempted
+ * Validate that no live execution paths are attempted when disabled
  */
 export function validateNoLiveExecution(operation: string): void {
-  throw new Error(
-    `BLOCKED: ${operation} is not allowed in PR1. ` +
-    'This build is simulation-only and does not support live transaction execution.'
-  );
+  const config = getConfig();
+  
+  if (!config.enableLiveExecution) {
+    throw new Error(
+      `BLOCKED: ${operation} requires ENABLE_LIVE_EXECUTION=true. ` +
+      'This operation is disabled for safety. Set ENABLE_LIVE_EXECUTION=true to enable live execution.'
+    );
+  }
+  
+  if (config.enableLiveExecution && !config.enableFlashbots) {
+    throw new Error(
+      `BLOCKED: ${operation} requires ENABLE_FLASHBOTS=true when live execution is enabled. ` +
+      'Live execution without Flashbots is not supported for safety.'
+    );
+  }
 }
 
 // Export the global config instance
