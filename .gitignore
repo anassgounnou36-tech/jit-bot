@@ -15,3 +15,4 @@ reports/*.json
 reports/*.csv
 reports/*.md
 !reports/.gitkeep
+!reports/fixture-*.json
