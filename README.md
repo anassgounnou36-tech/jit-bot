@@ -332,6 +332,33 @@ This release includes comprehensive production hardening features designed for s
    cp .env.example .env
    ```
 
+## 🔢 Amount Units
+
+**Important**: The orchestrator and all internal processing uses **18-decimal engine units** for amounts, independent of the actual token decimals (e.g., USDC has 6 decimals, but the orchestrator expects 18).
+
+### Usage Guidelines
+
+- **Scripts and API calls**: Always pass amounts with 18 decimals using `ethers.utils.parseUnits(amount, 18)`
+- **Display formatting**: Convert for display using `ethers.utils.formatUnits(amount, 18)` 
+- **Token-native decimals**: Only used for final on-chain token transfers, not for orchestrator logic
+
+### Examples
+
+```javascript
+// ✅ Correct: Use 18 decimals for orchestrator
+const amount100USDC = utils.parseUnits("100", 18);
+await orchestrator.validateFlashloanParameters(usdcToken, amount100USDC, provider);
+
+// ✅ Correct: Display with engine units
+console.log(`Amount: ${utils.formatUnits(amount100USDC, 18)} engine units`);
+
+// ❌ Incorrect: Don't use token-native decimals with orchestrator
+const wrongAmount = utils.parseUnits("100", 6); // USDC native decimals
+await orchestrator.validateFlashloanParameters(usdcToken, wrongAmount, provider); // Will fail validation
+```
+
+This convention prevents confusion between token-specific decimal places and ensures consistent internal calculations across all supported tokens.
+
 2. **Configure environment variables**
    ```bash
    # ===============================
