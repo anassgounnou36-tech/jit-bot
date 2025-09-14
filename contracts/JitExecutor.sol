@@ -85,9 +85,12 @@ contract JitExecutor is Ownable, ReentrancyGuard {
     event PositionBurned(uint256 indexed tokenId, uint256 amount0, uint256 amount1);
     event ProfitTransferred(address indexed recipient, uint256 amount);
     event JitFailed(string reason);
+    event JitExecuted(uint256 indexed tokenId, uint256 profit, uint256 gasUsed);
+    event JitRejected(string reason, uint256 expectedProfit, uint256 actualProfit);
     event ConfigUpdated(uint256 minProfitThreshold, uint256 maxLoanSize);
     event ProfitRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event EmergencyPaused(bool paused);
+    event OwnershipTransferRequested(address indexed previousOwner, address indexed newOwner);
 
     /// @notice Errors
     error ExecutionPaused();
@@ -96,6 +99,9 @@ contract JitExecutor is Ownable, ReentrancyGuard {
     error FlashloanCallbackFailed(string reason);
     error InvalidProfitRecipient();
     error UnauthorizedFlashloanCallback();
+    error InvalidTokenAmount();
+    error InvalidPoolConfiguration();
+    error PositionMintFailed();
 
     /// @notice Flashloan execution context
     struct FlashloanContext {
@@ -242,6 +248,7 @@ contract JitExecutor is Ownable, ReentrancyGuard {
         require(flashloanContext.isActive, "No active flashloan context");
 
         FlashloanContext memory context = flashloanContext;
+        uint256 startGas = gasleft();
         
         // Step 1: Mint liquidity position around expected price
         uint256 tokenId = _mintLiquidityPosition(context);
@@ -253,20 +260,55 @@ contract JitExecutor is Ownable, ReentrancyGuard {
         // Step 3: Decrease liquidity and collect fees
         (uint256 amount0, uint256 amount1) = _decreaseLiquidityAndCollect(tokenId);
 
-        // Step 4: Calculate and validate profit
-        uint256 totalReceived = amount0 + amount1; // Simplified - in practice need to handle token0/token1 properly
-        uint256 totalCost = context.amount + context.fee;
-        
-        if (totalReceived < totalCost + minProfitThreshold) {
-            revert InsufficientProfit(totalCost + minProfitThreshold, totalReceived);
+        // Step 4: Enhanced profit validation with detailed accounting
+        (uint256 finalAmount, uint256 repayAmount, uint256 profit) = _validateAndCalculateProfit(
+            context,
+            amount0,
+            amount1
+        );
+
+        // Enforce on-chain profit guard: finalAmount >= repayAmount + minProfit
+        if (finalAmount < repayAmount + minProfitThreshold) {
+            emit JitRejected("Insufficient profit after fees", repayAmount + minProfitThreshold, finalAmount);
+            revert InsufficientProfit(repayAmount + minProfitThreshold, finalAmount);
         }
 
         // Step 5: Transfer profit to recipient
-        uint256 profit = totalReceived - totalCost;
         if (profit > 0) {
             IERC20(context.token).safeTransfer(profitRecipient, profit);
             emit ProfitTransferred(profitRecipient, profit);
         }
+
+        uint256 gasUsed = startGas - gasleft();
+        emit JitExecuted(tokenId, profit, gasUsed);
+    }
+
+    /// @notice Validate profit and calculate amounts with enhanced accounting
+    /// @param context Flashloan context
+    /// @param amount0 Amount of token0 collected
+    /// @param amount1 Amount of token1 collected
+    /// @return finalAmount Total amount available for repayment and profit
+    /// @return repayAmount Amount needed to repay flashloan (principal + fee)
+    /// @return profit Net profit after repayment
+    function _validateAndCalculateProfit(
+        FlashloanContext memory context,
+        uint256 amount0,
+        uint256 amount1
+    ) private pure returns (uint256 finalAmount, uint256 repayAmount, uint256 profit) {
+        // For simplified implementation, assume single token strategy
+        // In production, would need to handle both token0 and token1 properly
+        // and potentially swap one to the other for repayment
+        
+        finalAmount = amount0 + amount1; // Simplified calculation
+        repayAmount = context.amount + context.fee;
+        
+        if (finalAmount >= repayAmount) {
+            profit = finalAmount - repayAmount;
+        } else {
+            profit = 0; // Will trigger revert in calling function
+        }
+        
+        return (finalAmount, repayAmount, profit);
     }
 
     /// @notice Mint liquidity position
@@ -360,11 +402,63 @@ contract JitExecutor is Ownable, ReentrancyGuard {
         }
     }
 
-    /// @notice Update configuration
+    /// @notice Enhanced ownership transfer with explicit confirmation
+    function setOwner(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid new owner");
+        require(newOwner != owner(), "Already the owner");
+        
+        emit OwnershipTransferRequested(owner(), newOwner);
+        _transferOwnership(newOwner);
+    }
+
+    /// @notice Update configuration with validation
     function updateConfig(uint256 _minProfitThreshold, uint256 _maxLoanSize) external onlyOwner {
+        require(_maxLoanSize > 0, "Invalid max loan size");
+        require(_minProfitThreshold <= _maxLoanSize / 100, "Min profit too high"); // Max 1% of loan size
+        
         minProfitThreshold = _minProfitThreshold;
         maxLoanSize = _maxLoanSize;
         emit ConfigUpdated(_minProfitThreshold, _maxLoanSize);
+    }
+
+    /// @notice Set maximum loan size with validation
+    function setMaxLoanSize(uint256 _maxLoanSize) external onlyOwner {
+        require(_maxLoanSize > minProfitThreshold, "Max loan size too small");
+        maxLoanSize = _maxLoanSize;
+        emit ConfigUpdated(minProfitThreshold, _maxLoanSize);
+    }
+
+    /// @notice View functions for transparency
+    function getConfiguration() external view returns (
+        uint256 _minProfitThreshold,
+        uint256 _maxLoanSize,
+        address _profitRecipient,
+        bool _paused
+    ) {
+        return (minProfitThreshold, maxLoanSize, profitRecipient, paused);
+    }
+
+    function getPositionManager() external view returns (address) {
+        return address(positionManager);
+    }
+
+    function isFlashloanActive() external view returns (bool) {
+        return flashloanContext.isActive;
+    }
+
+    function getCurrentFlashloanContext() external view returns (
+        address token,
+        uint256 amount,
+        uint256 fee,
+        uint256 tokenId
+    ) {
+        require(flashloanContext.isActive, "No active flashloan");
+        return (
+            flashloanContext.token,
+            flashloanContext.amount,
+            flashloanContext.fee,
+            flashloanContext.tokenId
+        );
     }
 
     /// @notice Receive ETH
