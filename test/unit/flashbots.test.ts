@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { ethers } from 'ethers';
-import { FlashbotsManager, getFlashbotsManager, resetFlashbotsManager } from '../../src/exec/flashbots';
+import { getFlashbotsManager, resetFlashbotsManager } from '../../src/exec/flashbots';
 
 describe('FlashbotsManager', function () {
   this.timeout(10000);
@@ -44,8 +44,12 @@ describe('FlashbotsManager', function () {
         maxPriorityFeePerGas: ethers.utils.parseUnits('2', 'gwei')
       }];
 
-      await expect(manager.createBundle(transactions, targetBlock))
-        .to.be.rejectedWith('exceeds limit');
+      try {
+        await manager.createBundle(transactions, targetBlock);
+        expect.fail('Should have thrown an error');
+      } catch (error: any) {
+        expect(error.message).to.include('exceeds limit');
+      }
     });
 
     it('should validate priority fee limits', async () => {
@@ -61,8 +65,12 @@ describe('FlashbotsManager', function () {
         maxPriorityFeePerGas: ethers.utils.parseUnits('150', 'gwei') // Exceeds limit
       }];
 
-      await expect(manager.createBundle(transactions, targetBlock))
-        .to.be.rejectedWith('exceeds limit');
+      try {
+        await manager.createBundle(transactions, targetBlock);
+        expect.fail('Should have thrown an error');
+      } catch (error: any) {
+        expect(error.message).to.include('exceeds limit');
+      }
     });
   });
 

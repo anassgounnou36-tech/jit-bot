@@ -2,17 +2,17 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { SimpleJitExecutor } from "../typechain-types";
-import { JitBot } from "../src/bot/index";
+// import { JitBot } from "../src/bot/index";
 import { Metrics } from "../src/metrics/metrics";
 
 describe("JIT Bot Integration Tests", function () {
   let simpleJitExecutor: SimpleJitExecutor;
   let owner: SignerWithAddress;
-  let user: SignerWithAddress;
+  // let user: SignerWithAddress;
   let metrics: Metrics;
 
   beforeEach(async function () {
-    [owner, user] = await ethers.getSigners();
+    [owner] = await ethers.getSigners();
 
     // Deploy contract
     const SimpleJitExecutor = await ethers.getContractFactory("SimpleJitExecutor");
@@ -114,7 +114,7 @@ describe("JIT Bot Integration Tests", function () {
         value: ethers.utils.parseEther("1")
       });
 
-      const initialBalance = await owner.getBalance();
+      // const initialBalance = await owner.getBalance();
       const contractBalance = await ethers.provider.getBalance(simpleJitExecutor.address);
       
       expect(contractBalance).to.equal(ethers.utils.parseEther("1"));

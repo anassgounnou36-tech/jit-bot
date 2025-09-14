@@ -13,7 +13,7 @@ export class AaveAdapter {
 
   // Aave V3 Mainnet addresses
   private static readonly POOL_ADDRESS = '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2';
-  private static readonly POOL_ADDRESSES_PROVIDER = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e';
+  // private static readonly POOL_ADDRESSES_PROVIDER = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e';
   
   // Standard Aave V3 fee: 0.05%
   private static readonly FLASHLOAN_FEE_PERCENTAGE = 5; // 0.05% = 5/10000

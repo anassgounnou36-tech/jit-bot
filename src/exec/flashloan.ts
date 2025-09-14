@@ -334,6 +334,7 @@ export class FlashloanOrchestrator {
     providerType: 'balancer' | 'aave';
     adapter: any;
     fee: ethers.BigNumber;
+    maxAmount: ethers.BigNumber;
     reason: string;
   }> {
     this.logger.info({
@@ -348,6 +349,8 @@ export class FlashloanOrchestrator {
       const balancerSufficient = await balancerAdapter.hassufficientLiquidity(token, amount);
       
       if (balancerSufficient) {
+        const maxAmount = await balancerAdapter.getMaxFlashloanAmount(token);
+        
         this.logger.info({
           msg: 'Selected Balancer as flashloan provider',
           reason: 'Sufficient liquidity and no fees'
@@ -357,6 +360,7 @@ export class FlashloanOrchestrator {
           providerType: 'balancer',
           adapter: balancerAdapter,
           fee: ethers.BigNumber.from(0),
+          maxAmount,
           reason: 'Balancer has sufficient liquidity with no fees'
         };
       }
@@ -367,6 +371,7 @@ export class FlashloanOrchestrator {
       
       if (aaveSufficient) {
         const aaveFee = await aaveAdapter.calculateFlashloanFee(token, amount);
+        const maxAmount = await aaveAdapter.getMaxFlashloanAmount(token);
         
         this.logger.info({
           msg: 'Selected Aave as flashloan provider',
@@ -378,6 +383,7 @@ export class FlashloanOrchestrator {
           providerType: 'aave',
           adapter: aaveAdapter,
           fee: aaveFee,
+          maxAmount,
           reason: 'Balancer insufficient liquidity, fallback to Aave'
         };
       }
@@ -404,6 +410,7 @@ export class FlashloanOrchestrator {
     valid: boolean;
     issues: string[];
     fee?: ethers.BigNumber;
+    maxAmount?: ethers.BigNumber;
     selectedProvider?: 'balancer' | 'aave';
     adapter?: any;
   }> {
@@ -435,6 +442,7 @@ export class FlashloanOrchestrator {
         valid: issues.length === 0,
         issues,
         fee: selection.fee,
+        maxAmount: selection.maxAmount,
         selectedProvider: selection.providerType,
         adapter: selection.adapter
       };
@@ -575,55 +583,6 @@ export class FlashloanOrchestrator {
       name: provider.name,
       enabled: provider.enabled
     }));
-  }
-  
-  /**
-   * Validate flashloan parameters
-   */
-  async validateFlashloanParams(
-    token: string,
-    amount: ethers.BigNumber,
-    providerName?: string
-  ): Promise<{
-    valid: boolean;
-    issues: string[];
-    maxAmount?: ethers.BigNumber;
-    fee?: ethers.BigNumber;
-  }> {
-    const issues: string[] = [];
-    
-    try {
-      const provider = this.getProvider(providerName);
-      
-      // Check maximum available amount
-      const maxAmount = await provider.getMaxFlashloanAmount(token);
-      
-      if (amount.gt(maxAmount)) {
-        issues.push(`Requested amount ${ethers.utils.formatEther(amount)} exceeds maximum ${ethers.utils.formatEther(maxAmount)}`);
-      }
-      
-      // Calculate fee
-      const fee = await provider.calculateFlashloanFee(token, amount);
-      
-      // Check minimum amount makes sense
-      if (amount.lt(ethers.utils.parseEther('0.01'))) {
-        issues.push('Flashloan amount too small, fees may exceed profits');
-      }
-      
-      return {
-        valid: issues.length === 0,
-        issues,
-        maxAmount,
-        fee
-      };
-      
-    } catch (error: any) {
-      issues.push(`Validation error: ${error.message}`);
-      return {
-        valid: false,
-        issues
-      };
-    }
   }
 }
 

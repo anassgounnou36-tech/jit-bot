@@ -50,7 +50,7 @@ describe('Flashloan Orchestrator', function () {
       // Mock Aave adapter with sufficient liquidity
       const aaveAdapter = getAaveAdapter(mockProvider);
       aaveAdapter.hasSufficientLiquidity = async () => true;
-      aaveAdapter.calculateFlashloanFee = async (token: string, amount: ethers.BigNumber) => {
+      aaveAdapter.calculateFlashloanFee = async (_token: string, amount: ethers.BigNumber) => {
         return amount.mul(5).div(10000); // 0.05% fee
       };
 
@@ -132,7 +132,7 @@ describe('Flashloan Orchestrator', function () {
 
       const aaveAdapter = getAaveAdapter(mockProvider);
       aaveAdapter.hasSufficientLiquidity = async () => true;
-      aaveAdapter.calculateFlashloanFee = async (token: string, amount: ethers.BigNumber) => {
+      aaveAdapter.calculateFlashloanFee = async (_token: string, amount: ethers.BigNumber) => {
         return amount.mul(5).div(10000); // 0.05% fee
       };
 
