@@ -58,6 +58,9 @@ export class ForkSimulator {
 
   async simulateJitStrategy(params: SwapParameters): Promise<SimulationResult> {
     try {
+      // First, validate gas price before any other validation
+      await this.validateGasPrice(params.gasPrice);
+
       // Create forked environment
       await this.initializeFork();
 
@@ -257,6 +260,17 @@ export class ForkSimulator {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  // Validate gas price against MAX_GAS_GWEI limit
+  private async validateGasPrice(gasPrice: ethers.BigNumber): Promise<void> {
+    // Get MAX_GAS_GWEI from environment, default to 100 if not set
+    const maxGasGwei = parseInt(process.env.MAX_GAS_GWEI || '100');
+    const maxGasWei = ethers.utils.parseUnits(maxGasGwei.toString(), 'gwei');
+    
+    if (gasPrice.gt(maxGasWei)) {
+      throw new Error('Gas validation failed');
     }
   }
 }

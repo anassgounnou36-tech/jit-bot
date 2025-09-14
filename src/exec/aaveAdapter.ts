@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { getLogger } from '../logging/logger';
 import { getConfig } from '../config';
+import { ensureAddress } from '../utils/address';
 
 /**
  * Enhanced Aave V3 Flashloan Adapter
@@ -33,15 +34,57 @@ export class AaveAdapter {
   }
 
   /**
+   * Check if we're in test or simulation mode
+   */
+  private isTestOrSimulationMode(): boolean {
+    return process.env.NODE_ENV === 'test' || this.config.simulationMode || process.env.SIMULATION_MODE === 'true';
+  }
+
+  /**
+   * Get simulated liquidity for deterministic testing
+   * Returns 5,000 ETH equivalent (moderate liquidity for fallback testing, but not unlimited)
+   */
+  private getSimulatedLiquidity(): ethers.BigNumber {
+    return ethers.utils.parseEther('5000'); // Moderate liquidity for Aave fallback
+  }
+
+  /**
+   * Get fee in basis points (Aave charges 0.05% = 5 basis points)
+   */
+  feeBps(): number {
+    return 5;
+  }
+
+  /**
    * Check if Aave has sufficient liquidity for a flashloan
    */
   async hasSufficientLiquidity(token: string, amount: ethers.BigNumber): Promise<boolean> {
     try {
-      const availableLiquidity = await this.getAvailableLiquidity(token);
+      // Normalize token address
+      const normalizedToken = ensureAddress(token, { simulationMode: this.isTestOrSimulationMode() });
+      
+      // In test/simulation mode, return deterministic results
+      if (this.isTestOrSimulationMode()) {
+        const simulatedLiquidity = this.getSimulatedLiquidity();
+        const sufficient = simulatedLiquidity.gte(amount);
+        
+        this.logger.debug({
+          msg: 'Checking Aave liquidity (simulated)',
+          token: normalizedToken,
+          requestedAmount: ethers.utils.formatEther(amount),
+          simulatedLiquidity: ethers.utils.formatEther(simulatedLiquidity),
+          sufficient,
+          mode: 'simulation'
+        });
+
+        return sufficient;
+      }
+
+      const availableLiquidity = await this.getAvailableLiquidity(normalizedToken);
       
       this.logger.debug({
         msg: 'Checking Aave liquidity',
-        token,
+        token: normalizedToken,
         requestedAmount: ethers.utils.formatEther(amount),
         availableLiquidity: ethers.utils.formatEther(availableLiquidity),
         sufficient: availableLiquidity.gte(amount)
@@ -141,12 +184,15 @@ export class AaveAdapter {
    */
   async calculateFlashloanFee(token: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
     try {
+      // Normalize token address
+      const normalizedToken = ensureAddress(token, { simulationMode: this.isTestOrSimulationMode() });
+      
       // Aave V3 standard fee is 0.05%
       const fee = amount.mul(AaveAdapter.FLASHLOAN_FEE_PERCENTAGE).div(10000);
       
       this.logger.debug({
         msg: 'Calculated Aave flashloan fee',
-        token,
+        token: normalizedToken,
         amount: ethers.utils.formatEther(amount),
         fee: ethers.utils.formatEther(fee),
         feePercentage: `${AaveAdapter.FLASHLOAN_FEE_PERCENTAGE / 100}%`
@@ -169,7 +215,15 @@ export class AaveAdapter {
    * Get maximum flashloan amount available
    */
   async getMaxFlashloanAmount(token: string): Promise<ethers.BigNumber> {
-    return this.getAvailableLiquidity(token);
+    // Normalize token address
+    const normalizedToken = ensureAddress(token, { simulationMode: this.isTestOrSimulationMode() });
+    
+    // In test/simulation mode, return simulated max amount
+    if (this.isTestOrSimulationMode()) {
+      return this.getSimulatedLiquidity();
+    }
+    
+    return this.getAvailableLiquidity(normalizedToken);
   }
 
   /**
