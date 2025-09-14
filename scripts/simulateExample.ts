@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { MempoolWatcher } from "../src/watcher/mempoolWatcher";
+// import { MempoolWatcher } from "../src/watcher/mempoolWatcher";
 import { Simulator } from "../src/watcher/simulator";
 import config from "../config.json";
 import * as dotenv from "dotenv";

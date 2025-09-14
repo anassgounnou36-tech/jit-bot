@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { getLogger } from '../logging/logger';
-import { getConfig } from '../config';
+// import { getConfig } from '../config';
 
 /**
  * Balancer Flashloan Adapter
@@ -8,18 +8,18 @@ import { getConfig } from '../config';
  */
 export class BalancerAdapter {
   private logger: any;
-  private config: any;
+  // private config: any;
   private provider: ethers.providers.Provider;
 
   // Balancer Vault address (Ethereum mainnet)
   private static readonly VAULT_ADDRESS = '0xBA12222222228d8Ba445958a75a0704d566BF2C8';
   
   // Balancer has no flashloan fees
-  private static readonly FLASHLOAN_FEE_PERCENTAGE = 0;
+  // private static readonly FLASHLOAN_FEE_PERCENTAGE = 0;
 
   constructor(provider: ethers.providers.Provider) {
     this.logger = getLogger().child({ component: 'balancer-adapter' });
-    this.config = getConfig();
+    // this.config = getConfig();
     this.provider = provider;
   }
 
@@ -120,7 +120,7 @@ export class BalancerAdapter {
   /**
    * Calculate flashloan fee (Balancer has no fees)
    */
-  async calculateFlashloanFee(token: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
+  async calculateFlashloanFee(_token: string, _amount: ethers.BigNumber): Promise<ethers.BigNumber> {
     return ethers.BigNumber.from(0);
   }
 

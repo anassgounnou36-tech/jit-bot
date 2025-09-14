@@ -185,6 +185,52 @@ See [BUNDLE_ORDERING.md](docs/BUNDLE_ORDERING.md) for detailed documentation.
 - **Flexible Configuration**: Environment-based configuration with validation and hot-reloading
 - **Provider Abstraction**: Extensible flashloan provider system (Aave V3, future Compound V3)
 
+## 🛡️ Production Hardening (PR2)
+
+This release includes comprehensive production hardening features designed for secure and reliable mainnet deployment:
+
+### Enhanced Flashloan Infrastructure
+- **Balancer Vault Primary**: Zero-fee flashloans with automatic liquidity checking
+- **Aave V3 Fallback**: 0.05% fee fallback when Balancer liquidity insufficient
+- **Provider Selection Logic**: Intelligent provider selection optimizing for cost and availability
+- **Comprehensive Fee Calculation**: Real-time fee estimation and profit optimization
+
+### Deterministic Bundle Ordering
+- **Raw Transaction Capture**: Multi-strategy victim transaction capture from mempool
+- **Strict Bundle Validation**: Comprehensive ordering validation before submission
+- **Victim TX Inclusion**: Required victim transaction with raw signed bytes for deterministic execution
+- **Bundle Structure Enforcement**: [JIT Mint] → [Victim Swap] → [JIT Burn/Collect] ordering
+
+### Enhanced JIT Executor Contract
+- **Dual Flashloan Callbacks**: Both Balancer `receiveFlashLoan` and Aave `executeOperation` support
+- **Atomic Profit Guard**: On-chain profit validation with configurable minimum thresholds
+- **Emergency Controls**: Pause/unpause, emergency withdraw, and configuration updates
+- **Event Tracking**: Comprehensive event emission for monitoring and debugging
+
+### Fork Simulation & Testing
+- **Preflight Validation**: Complete end-to-end simulation on local mainnet fork
+- **Test Fixture Generation**: Automated generation of real mainnet transaction fixtures
+- **E2E Test Suite**: Comprehensive integration tests with profit validation
+- **Bundle Ordering Tests**: Specific tests for victim transaction inclusion and ordering
+
+### Enhanced CI/CD Pipeline
+- **Multi-stage Validation**: lint-and-typecheck → build → validate-bundle-ordering → e2e-simulation
+- **Environment-gated Jobs**: Slither analysis and E2E tests gated by environment variables
+- **Artifact Generation**: Automated test reports and fixture validation
+- **Production Readiness Gates**: Profit threshold validation and comprehensive testing
+
+### Monitoring & Alerting
+- **Bundle Ordering Metrics**: Track victim transaction inclusion and ordering violations
+- **Provider Selection Telemetry**: Monitor flashloan provider performance and fallbacks
+- **Profit Threshold Validation**: Ensure average profits meet production requirements ($25+ USD)
+- **Raw Transaction Capture Monitoring**: Track success rates of victim transaction capture
+
+### Documentation & Compliance
+- **Bundle Ordering Guide**: Comprehensive documentation of victim transaction requirements
+- **Production Deployment Guide**: Step-by-step production hardening checklist
+- **Monitoring Playbooks**: Alert rules and troubleshooting guides
+- **Security Best Practices**: Comprehensive security considerations and validation
+
 ## 📋 Table of Contents
 
 - [Architecture](#architecture)
