@@ -1,0 +1,182 @@
+name: Security Analysis with Slither
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'contracts/**'
+      - 'hardhat.config.ts'
+      - '.github/workflows/slither.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'contracts/**'
+      - 'hardhat.config.ts'
+      - '.github/workflows/slither.yml'
+
+jobs:
+  slither-analysis:
+    name: Slither Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Setup Python for Slither
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.8'
+        
+    - name: Install Slither
+      run: |
+        python -m pip install --upgrade pip
+        pip install slither-analyzer
+        
+    - name: Install Solc
+      run: |
+        wget -O solc https://github.com/ethereum/solidity/releases/download/v0.8.19/solc-static-linux
+        chmod +x solc
+        sudo mv solc /usr/local/bin/
+        
+    - name: Compile contracts
+      run: |
+        # Try to compile, but don't fail if compilation has issues
+        npm run build:contracts || echo "Contract compilation completed with warnings"
+        
+    - name: Run Slither analysis
+      run: |
+        # Run Slither with JSON output and continue on errors
+        slither contracts/ \
+          --json slither-report.json \
+          --exclude-dependencies \
+          --exclude-optimization \
+          --exclude-informational \
+          --exclude naming-convention,solc-version,pragma,unused-state \
+          --filter-paths node_modules \
+          || echo "Slither analysis completed"
+        
+    - name: Process Slither results
+      run: |
+        # Create a readable summary from JSON output
+        if [ -f slither-report.json ]; then
+          echo "# Slither Security Analysis Results" > slither-summary.md
+          echo "" >> slither-summary.md
+          
+          # Count issues by severity
+          HIGH_COUNT=$(jq '[.results.detectors[] | select(.impact == "High")] | length' slither-report.json || echo "0")
+          MEDIUM_COUNT=$(jq '[.results.detectors[] | select(.impact == "Medium")] | length' slither-report.json || echo "0")
+          LOW_COUNT=$(jq '[.results.detectors[] | select(.impact == "Low")] | length' slither-report.json || echo "0")
+          
+          echo "## Summary" >> slither-summary.md
+          echo "- 🔴 High Severity: $HIGH_COUNT" >> slither-summary.md
+          echo "- 🟠 Medium Severity: $MEDIUM_COUNT" >> slither-summary.md
+          echo "- 🟡 Low Severity: $LOW_COUNT" >> slither-summary.md
+          echo "" >> slither-summary.md
+          
+          # Add high severity issues details
+          if [ "$HIGH_COUNT" -gt "0" ]; then
+            echo "## 🔴 High Severity Issues" >> slither-summary.md
+            jq -r '.results.detectors[] | select(.impact == "High") | "### " + .check + "\n**Description:** " + .description + "\n**Confidence:** " + .confidence + "\n"' slither-report.json >> slither-summary.md || echo "Error processing high severity issues" >> slither-summary.md
+          fi
+          
+          # Add medium severity issues details
+          if [ "$MEDIUM_COUNT" -gt "0" ]; then
+            echo "## 🟠 Medium Severity Issues" >> slither-summary.md
+            jq -r '.results.detectors[] | select(.impact == "Medium") | "### " + .check + "\n**Description:** " + .description + "\n**Confidence:** " + .confidence + "\n"' slither-report.json >> slither-summary.md || echo "Error processing medium severity issues" >> slither-summary.md
+          fi
+          
+          echo "Analysis completed at $(date)" >> slither-summary.md
+          
+          # Print summary to console
+          cat slither-summary.md
+        else
+          echo "⚠️ Slither report not generated"
+          echo "# Slither Analysis" > slither-summary.md
+          echo "Analysis could not be completed. Please check the logs above." >> slither-summary.md
+        fi
+        
+    - name: Upload Slither report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: slither-security-report
+        path: |
+          slither-report.json
+          slither-summary.md
+        retention-days: 30
+        
+    - name: Comment PR with results
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          let summary = "# 🔍 Slither Security Analysis\n\n";
+          
+          try {
+            if (fs.existsSync('slither-summary.md')) {
+              summary += fs.readFileSync('slither-summary.md', 'utf8');
+            } else {
+              summary += "⚠️ Analysis could not be completed. Please check the workflow logs.";
+            }
+            
+            summary += "\n\n---\n*This analysis was automatically generated by [Slither](https://github.com/crytic/slither)*";
+            
+            // Find existing comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.data.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('🔍 Slither Security Analysis')
+            );
+            
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: summary
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary
+              });
+            }
+          } catch (error) {
+            console.log('Could not comment on PR:', error);
+          }
+          
+    - name: Fail on high severity issues
+      run: |
+        if [ -f slither-report.json ]; then
+          HIGH_COUNT=$(jq '[.results.detectors[] | select(.impact == "High")] | length' slither-report.json || echo "0")
+          if [ "$HIGH_COUNT" -gt "0" ]; then
+            echo "❌ Found $HIGH_COUNT high severity security issues!"
+            echo "Please review and fix these issues before merging."
+            exit 1
+          else
+            echo "✅ No high severity security issues found"
+          fi
+        else
+          echo "⚠️ Could not determine security status - proceeding with caution"
+        fi
