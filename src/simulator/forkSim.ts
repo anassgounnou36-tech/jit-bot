@@ -125,7 +125,6 @@ export async function runPreflightSimulation(params: ForkSimulationParams): Prom
 
   try {
     // Step 1: Validate gas parameters FIRST (before pool validation)
-    const config = getConfig();
     const gasValidation = validateGasParameters(params, config);
     if (!gasValidation) {
       return createFailedPreflightResult('Gas validation failed', logger);

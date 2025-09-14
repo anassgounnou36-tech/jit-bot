@@ -21,6 +21,16 @@ class MockJsonRpcProvider extends ethers.providers.JsonRpcProvider {
   async getGasPrice() {
     return ethers.BigNumber.from('20000000000'); // 20 gwei
   }
+  // Mock other common methods to prevent network calls
+  async getBalance() {
+    return ethers.BigNumber.from('1000000000000000000'); // 1 ETH
+  }
+  async call() {
+    return '0x';
+  }
+  async estimateGas() {
+    return ethers.BigNumber.from('21000');
+  }
 }
 
 class MockWebSocketProvider extends ethers.providers.WebSocketProvider {
@@ -29,6 +39,12 @@ class MockWebSocketProvider extends ethers.providers.WebSocketProvider {
   }
   async getNetwork() {
     return FixedNetwork;
+  }
+  async getBlockNumber() {
+    return 18500000;
+  }
+  async getGasPrice() {
+    return ethers.BigNumber.from('20000000000');
   }
 }
 
