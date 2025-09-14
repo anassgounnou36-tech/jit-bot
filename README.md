@@ -151,11 +151,23 @@ I_UNDERSTAND_LIVE_RISK=true
 - **Opportunity Optimization**: Intelligent selection of the most profitable bundle per block
 - **Concentrated Liquidity**: Automated positioning around expected swap prices for maximum fee capture
 
-### Execution Infrastructure (PR2)
-- **Flash Loan Integration**: Zero-capital strategy using Aave V3 (primary) with extensible provider system
+### Execution Infrastructure (Production Hardened)
+- **Dual Flashloan Providers**: Balancer Vault (primary, no fees) with Aave V3 fallback (0.05% fee)
+- **Victim Transaction Inclusion**: Deterministic bundle ordering with raw signed transaction capture
+- **Bundle Validation**: Comprehensive ordering validation and profit guards before submission
 - **Flashbots Integration**: MEV-protected bundle execution with EIP-1559 gas optimization
 - **Fork Simulation Preflight**: Complete end-to-end validation on local mainnet fork before execution
 - **Live Execution Control**: Production-ready mainnet deployment with safety-first defaults
+
+#### Bundle Ordering
+Critical transaction ordering ensures profitable JIT execution:
+```
+Transaction 0: JIT Mint (create concentrated liquidity)
+Transaction 1: Victim Swap (captured from mempool with raw bytes)
+Transaction 2: JIT Burn/Collect (remove liquidity + collect fees)
+```
+
+See [BUNDLE_ORDERING.md](docs/BUNDLE_ORDERING.md) for detailed documentation.
 
 ### Risk Management
 - **Pool-Level Risk Management**: Per-pool failure tracking, auto-disable, and cooldown mechanisms

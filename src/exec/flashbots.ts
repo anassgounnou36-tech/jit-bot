@@ -9,6 +9,12 @@ export interface FlashbotsBundle {
   maxBlockNumber?: number;
   minTimestamp?: number;
   maxTimestamp?: number;
+  // Enhanced bundle with victim transaction support
+  victimTransaction?: {
+    rawTx: string;
+    hash: string;
+    insertAfterIndex: number; // Position to insert victim tx in bundle
+  };
 }
 
 export interface FlashbotsBundleResult {
@@ -26,6 +32,8 @@ export interface FlashbotsBundleResult {
     bundleHash: string;
     error?: string;
   };
+  // Track victim transaction inclusion
+  victimIncluded?: boolean;
 }
 
 export interface FlashbotsTransactionParams {
@@ -35,6 +43,17 @@ export interface FlashbotsTransactionParams {
   gasLimit: number;
   maxFeePerGas: ethers.BigNumber;
   maxPriorityFeePerGas: ethers.BigNumber;
+}
+
+// Enhanced bundle creation parameters
+export interface EnhancedBundleParams {
+  jitTransactions: FlashbotsTransactionParams[];
+  victimTransaction?: {
+    rawTx: string;
+    hash: string;
+  };
+  targetBlockNumber: number;
+  traceId?: string;
 }
 
 /**
@@ -127,6 +146,71 @@ export class FlashbotsManager {
   }
 
   /**
+   * Create enhanced Flashbots bundle with victim transaction inclusion
+   * Ensures proper ordering: [JIT mint] → [victim swap] → [JIT burn/collect]
+   */
+  async createEnhancedBundle(
+    params: EnhancedBundleParams
+  ): Promise<FlashbotsBundle> {
+    const logger = this.logger.child({ 
+      traceId: params.traceId, 
+      operation: 'create_enhanced_bundle' 
+    });
+
+    logger.info({
+      msg: 'Creating enhanced Flashbots bundle with victim transaction',
+      jitTxCount: params.jitTransactions.length,
+      hasVictimTx: !!params.victimTransaction,
+      targetBlock: params.targetBlockNumber
+    });
+
+    // Validate victim transaction is present for deterministic ordering
+    if (!params.victimTransaction) {
+      throw new Error('Victim transaction required for enhanced bundle creation');
+    }
+
+    // Validate JIT transaction count (should be exactly 2: mint + burn/collect)
+    if (params.jitTransactions.length !== 2) {
+      throw new Error('Enhanced bundle requires exactly 2 JIT transactions (mint + burn/collect)');
+    }
+
+    // Convert JIT transactions to transaction requests
+    const jitTxRequests = params.jitTransactions.map(tx => ({
+      to: tx.to,
+      data: tx.data,
+      value: tx.value || ethers.BigNumber.from(0),
+      gasLimit: tx.gasLimit,
+      maxFeePerGas: tx.maxFeePerGas,
+      maxPriorityFeePerGas: tx.maxPriorityFeePerGas,
+      type: 2, // EIP-1559
+      nonce: undefined // Will be filled by bundle executor
+    }));
+
+    // Bundle ordering: [JIT mint] → [victim swap] → [JIT burn/collect]
+    const bundle: FlashbotsBundle = {
+      transactions: jitTxRequests,
+      targetBlockNumber: params.targetBlockNumber,
+      maxBlockNumber: params.targetBlockNumber + 3,
+      victimTransaction: {
+        rawTx: params.victimTransaction.rawTx,
+        hash: params.victimTransaction.hash,
+        insertAfterIndex: 0 // Insert victim tx after first JIT transaction (mint)
+      }
+    };
+
+    logger.info({
+      msg: 'Enhanced bundle created successfully',
+      bundleSize: bundle.transactions.length,
+      victimTxHash: params.victimTransaction.hash,
+      victimInsertPosition: 1, // After mint, before burn
+      targetBlock: bundle.targetBlockNumber,
+      maxBlock: bundle.maxBlockNumber
+    });
+
+    return bundle;
+  }
+
+  /**
    * Simulate bundle execution against target block
    */
   async simulateBundle(
@@ -158,7 +242,8 @@ export class FlashbotsManager {
             gasUsed: bundle.transactions.reduce((sum, tx) => sum + Number(tx.gasLimit || 0), 0),
             effectiveGasPrice: ethers.BigNumber.from(bundle.transactions[0]?.maxFeePerGas || ethers.utils.parseUnits('20', 'gwei')),
             totalValue: bundle.transactions.reduce((sum, tx) => sum.add(tx.value || 0), ethers.BigNumber.from(0))
-          }
+          },
+          victimIncluded: !!bundle.victimTransaction
         };
 
         this.metrics.incrementFlashbotsSuccess('simulate');
@@ -286,6 +371,65 @@ export class FlashbotsManager {
     return {
       maxFeePerGas: maxFee.gt(maxGasWei) ? maxGasWei : maxFee,
       maxPriorityFeePerGas: priorityFee.gt(maxGasWei) ? maxGasWei : priorityFee
+    };
+  }
+
+  /**
+   * Validate bundle ordering and transaction requirements
+   */
+  validateBundleOrdering(bundle: FlashbotsBundle): {
+    valid: boolean;
+    issues: string[];
+  } {
+    const issues: string[] = [];
+
+    // Check minimum transaction count
+    if (bundle.transactions.length < 2) {
+      issues.push('Bundle must contain at least 2 transactions (mint + burn)');
+    }
+
+    // Check victim transaction inclusion for enhanced bundles
+    if (bundle.victimTransaction) {
+      const insertIndex = bundle.victimTransaction.insertAfterIndex;
+      
+      if (insertIndex < 0 || insertIndex >= bundle.transactions.length) {
+        issues.push('Victim transaction insert index out of bounds');
+      }
+      
+      if (!bundle.victimTransaction.rawTx) {
+        issues.push('Victim transaction raw bytes required');
+      }
+      
+      if (!bundle.victimTransaction.hash) {
+        issues.push('Victim transaction hash required');
+      }
+    }
+
+    // Check target block validity
+    if (bundle.targetBlockNumber <= 0) {
+      issues.push('Invalid target block number');
+    }
+
+    // Check transaction gas limits
+    const totalGasLimit = bundle.transactions.reduce((sum, tx) => sum + Number(tx.gasLimit || 0), 0);
+    const MAX_BLOCK_GAS_LIMIT = 30_000_000; // Ethereum block gas limit
+    
+    if (totalGasLimit > MAX_BLOCK_GAS_LIMIT * 0.8) { // Use 80% of block limit as safety margin
+      issues.push('Bundle gas usage too high for single block');
+    }
+
+    this.logger.debug({
+      msg: 'Bundle validation completed',
+      valid: issues.length === 0,
+      issues,
+      txCount: bundle.transactions.length,
+      hasVictim: !!bundle.victimTransaction,
+      totalGasLimit
+    });
+
+    return {
+      valid: issues.length === 0,
+      issues
     };
   }
 
