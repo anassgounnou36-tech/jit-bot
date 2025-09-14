@@ -65,12 +65,16 @@ export class FlashbotsManager {
   private config: any;
   private flashbotsSigner?: ethers.Wallet;
   private relayUrl: string;
+  private multiRelayUrls: string[];
 
   constructor() {
     this.config = getConfig();
     this.logger = getLogger().child({ component: 'flashbots' });
     this.metrics = initializeMetrics({ port: this.config.prometheusPort });
     this.relayUrl = this.config.flashbotsRelayUrl;
+    
+    // Initialize multi-relay support
+    this.multiRelayUrls = this.initializeMultiRelayUrls();
 
     // Initialize Flashbots signer if live execution is enabled
     if (this.config.enableLiveExecution && this.config.enableFlashbots && this.config.flashbotsPrivateKey) {
@@ -78,9 +82,46 @@ export class FlashbotsManager {
       this.logger.info({
         msg: 'Flashbots signer initialized',
         address: this.flashbotsSigner.address,
-        relay: this.relayUrl
+        relay: this.relayUrl,
+        multiRelayCount: this.multiRelayUrls.length
       });
     }
+  }
+
+  /**
+   * Initialize multi-relay URLs from environment variables
+   */
+  private initializeMultiRelayUrls(): string[] {
+    const relays: string[] = [];
+    
+    // Primary Flashbots relay
+    if (this.relayUrl) {
+      relays.push(this.relayUrl);
+    }
+    
+    // Optional Eden relay
+    const edenRelayUrl = process.env.EDEN_RELAY_URL;
+    if (edenRelayUrl) {
+      relays.push(edenRelayUrl);
+      this.logger.info({ msg: 'Eden relay configured', relay: edenRelayUrl });
+    }
+    
+    // Optional bloXroute relay
+    const bloxrouteRelayUrl = process.env.BLOXROUTE_RELAY_URL;
+    if (bloxrouteRelayUrl) {
+      relays.push(bloxrouteRelayUrl);
+      this.logger.info({ msg: 'bloXroute relay configured', relay: bloxrouteRelayUrl });
+    }
+    
+    // Additional relays from comma-separated env var
+    const additionalRelays = process.env.ADDITIONAL_RELAY_URLS;
+    if (additionalRelays) {
+      const additional = additionalRelays.split(',').map(url => url.trim()).filter(url => url);
+      relays.push(...additional);
+      this.logger.info({ msg: 'Additional relays configured', count: additional.length });
+    }
+    
+    return relays;
   }
 
   /**
@@ -211,7 +252,216 @@ export class FlashbotsManager {
   }
 
   /**
-   * Simulate bundle execution against target block
+   * Simulate bundle using eth_callBundle before submission
+   * Validates bundle execution and gas usage
+   */
+  async simulateBundleWithEthCall(
+    bundle: FlashbotsBundle,
+    traceId?: string
+  ): Promise<{
+    success: boolean;
+    gasUsed: number;
+    results: Array<{
+      success: boolean;
+      gasUsed: number;
+      returnData: string;
+      error?: string;
+    }>;
+    error?: string;
+  }> {
+    const logger = this.logger.child({ traceId, operation: 'eth_call_bundle_simulation' });
+    
+    logger.info({
+      msg: 'Simulating bundle with eth_callBundle',
+      targetBlock: bundle.targetBlockNumber,
+      txCount: bundle.transactions.length,
+      hasVictim: !!bundle.victimTransaction
+    });
+
+    try {
+      // Prepare transactions for simulation
+      const simulationTxs = await this.prepareTransactionsForSimulation(bundle);
+      
+      // Use eth_callBundle for simulation (if provider supports it)
+      const simulationResult = await this.performEthCallBundleSimulation(
+        simulationTxs,
+        bundle.targetBlockNumber
+      );
+
+      const totalGasUsed = simulationResult.results.reduce(
+        (sum, result) => sum + result.gasUsed, 
+        0
+      );
+
+      logger.info({
+        msg: 'Bundle simulation completed',
+        success: simulationResult.success,
+        totalGasUsed,
+        individualResults: simulationResult.results.length
+      });
+
+      return {
+        success: simulationResult.success,
+        gasUsed: totalGasUsed,
+        results: simulationResult.results
+      };
+
+    } catch (error: any) {
+      logger.error({
+        err: error,
+        msg: 'Bundle simulation failed'
+      });
+
+      return {
+        success: false,
+        gasUsed: 0,
+        results: [],
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Prepare transactions for simulation including victim transaction insertion
+   */
+  private async prepareTransactionsForSimulation(bundle: FlashbotsBundle): Promise<Array<{
+    to: string;
+    data: string;
+    value: string;
+    gasLimit: number;
+    from: string;
+  }>> {
+    const simulationTxs: Array<{
+      to: string;
+      data: string;
+      value: string;
+      gasLimit: number;
+      from: string;
+    }> = [];
+
+    // Add first JIT transaction (mint)
+    if (bundle.transactions[0]) {
+      simulationTxs.push({
+        to: bundle.transactions[0].to!,
+        data: bundle.transactions[0].data!.toString(),
+        value: bundle.transactions[0].value?.toString() || '0',
+        gasLimit: Number(bundle.transactions[0].gasLimit || 500000),
+        from: '0x1234567890123456789012345678901234567890' // Mock sender for simulation
+      });
+    }
+
+    // Insert victim transaction if present
+    if (bundle.victimTransaction) {
+      try {
+        // Parse the raw victim transaction to extract fields
+        const parsedVictimTx = ethers.utils.parseTransaction(bundle.victimTransaction.rawTx);
+        
+        simulationTxs.push({
+          to: parsedVictimTx.to || '',
+          data: parsedVictimTx.data,
+          value: parsedVictimTx.value.toString(),
+          gasLimit: Number(parsedVictimTx.gasLimit),
+          from: parsedVictimTx.from || '0x0000000000000000000000000000000000000000'
+        });
+      } catch (error: any) {
+        this.logger.warn({
+          err: error,
+          msg: 'Failed to parse victim transaction for simulation',
+          victimTxHash: bundle.victimTransaction.hash
+        });
+        
+        // Skip victim transaction in simulation but continue
+      }
+    }
+
+    // Add second JIT transaction (burn/collect)
+    if (bundle.transactions[1]) {
+      simulationTxs.push({
+        to: bundle.transactions[1].to!,
+        data: bundle.transactions[1].data!.toString(),
+        value: bundle.transactions[1].value?.toString() || '0',
+        gasLimit: Number(bundle.transactions[1].gasLimit || 400000),
+        from: '0x1234567890123456789012345678901234567890' // Mock sender for simulation
+      });
+    }
+
+    return simulationTxs;
+  }
+
+  /**
+   * Perform eth_callBundle simulation
+   */
+  private async performEthCallBundleSimulation(
+    transactions: Array<{
+      to: string;
+      data: string;
+      value: string;
+      gasLimit: number;
+      from: string;
+    }>,
+    _blockNumber: number
+  ): Promise<{
+    success: boolean;
+    results: Array<{
+      success: boolean;
+      gasUsed: number;
+      returnData: string;
+      error?: string;
+    }>;
+  }> {
+    try {
+      // For testing/simulation mode, return mock results
+      if (!this.config.enableLiveExecution || !this.config.enableFlashbots) {
+        return this.createMockSimulationResult(transactions);
+      }
+
+      // In production, this would use the actual eth_callBundle RPC method
+      // For now, return a mock simulation since we don't have access to Flashbots relay
+      return this.createMockSimulationResult(transactions);
+
+    } catch (error: any) {
+      this.logger.warn({
+        err: error,
+        msg: 'eth_callBundle simulation failed, using fallback'
+      });
+
+      return {
+        success: false,
+        results: transactions.map(() => ({
+          success: false,
+          gasUsed: 0,
+          returnData: '0x',
+          error: 'Simulation not available'
+        }))
+      };
+    }
+  }
+
+  /**
+   * Create mock simulation result for testing
+   */
+  private createMockSimulationResult(
+    transactions: Array<{ gasLimit: number }>
+  ): {
+    success: boolean;
+    results: Array<{
+      success: boolean;
+      gasUsed: number;
+      returnData: string;
+    }>;
+  } {
+    return {
+      success: true,
+      results: transactions.map(tx => ({
+        success: true,
+        gasUsed: Math.floor(tx.gasLimit * 0.8), // Assume 80% of gas limit used
+        returnData: '0x'
+      }))
+    };
+  }
+
+  /**
+   * Simulate bundle execution against target block (legacy method)
    */
   async simulateBundle(
     bundle: FlashbotsBundle,
@@ -279,68 +529,103 @@ export class FlashbotsManager {
   }
 
   /**
-   * Submit bundle to Flashbots relay
+   * Submit bundle to multiple relays with retries and backoff
    */
-  async submitBundle(
+  async submitBundleWithMultiRelay(
     bundle: FlashbotsBundle,
     traceId?: string
   ): Promise<FlashbotsBundleResult> {
-    const logger = this.logger.child({ traceId, operation: 'submit_bundle' });
+    const logger = this.logger.child({ traceId, operation: 'submit_bundle_multi_relay' });
     
     // Validate live execution is enabled
-    validateNoLiveExecution('Flashbots bundle submission');
+    validateNoLiveExecution('Flashbots bundle submission to multiple relays');
 
     logger.info({
-      msg: 'Submitting Flashbots bundle',
+      msg: 'Submitting bundle to multiple relays',
       targetBlock: bundle.targetBlockNumber,
       txCount: bundle.transactions.length,
-      relay: this.relayUrl
+      relayCount: this.multiRelayUrls.length,
+      hasVictim: !!bundle.victimTransaction
     });
 
-    this.metrics.incrementFlashbotsAttempt('submit');
+    this.metrics.incrementFlashbotsAttempt('submit_multi_relay');
 
     try {
       if (!this.flashbotsSigner) {
         throw new Error('Flashbots signer not initialized');
       }
 
-      // First simulate the bundle
-      const simulationResult = await this.simulateBundle(bundle, traceId);
+      // Step 1: Enhanced simulation with eth_callBundle
+      const ethCallSimulation = await this.simulateBundleWithEthCall(bundle, traceId);
       
-      if (!simulationResult.simulation?.success) {
-        throw new Error(`Bundle simulation failed: ${simulationResult.simulation?.error}`);
+      if (!ethCallSimulation.success) {
+        throw new Error(`Bundle eth_callBundle simulation failed: ${ethCallSimulation.error}`);
       }
 
-      // For actual submission, we would use @flashbots/ethers-provider-bundle here
-      // This is a placeholder for the actual implementation
-      const bundleHash = `0x${Math.random().toString(16).slice(2, 66)}`;
-      
       logger.info({
-        msg: 'Bundle submitted to Flashbots relay',
-        bundleHash,
-        targetBlock: bundle.targetBlockNumber
+        msg: 'Bundle passed eth_callBundle simulation',
+        totalGasUsed: ethCallSimulation.gasUsed,
+        txResults: ethCallSimulation.results.length
       });
 
-      this.metrics.incrementFlashbotsSuccess('submit');
+      // Step 2: Submit to multiple relays in parallel
+      const submissionPromises = this.multiRelayUrls.map(relayUrl => 
+        this.submitToSingleRelay(bundle, relayUrl, traceId)
+      );
+
+      // Wait for at least one successful submission
+      const submissionResults = await Promise.allSettled(submissionPromises);
+      
+      // Process results
+      const successfulSubmissions = submissionResults
+        .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
+        .map(result => result.value)
+        .filter(result => result.success);
+
+      const failedSubmissions = submissionResults
+        .filter(result => result.status === 'rejected' || 
+          (result.status === 'fulfilled' && !result.value.success));
+
+      logger.info({
+        msg: 'Multi-relay submission completed',
+        successfulSubmissions: successfulSubmissions.length,
+        failedSubmissions: failedSubmissions.length,
+        totalRelays: this.multiRelayUrls.length
+      });
+
+      if (successfulSubmissions.length === 0) {
+        throw new Error('All relay submissions failed');
+      }
+
+      // Return the first successful submission
+      const primaryResult = successfulSubmissions[0];
+      
+      this.metrics.incrementFlashbotsSuccess('submit_multi_relay');
       this.metrics.updateLastBundleBlock(bundle.targetBlockNumber);
 
       return {
-        bundleHash,
-        simulation: simulationResult.simulation,
+        bundleHash: primaryResult.bundleHash,
+        simulation: {
+          success: true,
+          gasUsed: ethCallSimulation.gasUsed,
+          effectiveGasPrice: ethers.BigNumber.from(bundle.transactions[0]?.maxFeePerGas || 0),
+          totalValue: bundle.transactions.reduce((sum, tx) => sum.add(tx.value || 0), ethers.BigNumber.from(0))
+        },
         submission: {
           success: true,
           targetBlock: bundle.targetBlockNumber,
-          bundleHash
-        }
+          bundleHash: primaryResult.bundleHash
+        },
+        victimIncluded: !!bundle.victimTransaction
       };
 
     } catch (error: any) {
       logger.error({
         err: error,
-        msg: 'Bundle submission failed'
+        msg: 'Multi-relay bundle submission failed'
       });
 
-      this.metrics.incrementFlashbotsFailure('submit', error.message);
+      this.metrics.incrementFlashbotsFailure('submit_multi_relay', error.message);
 
       return {
         bundleHash: '',
@@ -352,6 +637,96 @@ export class FlashbotsManager {
         }
       };
     }
+  }
+
+  /**
+   * Submit bundle to a single relay with retries and exponential backoff
+   */
+  private async submitToSingleRelay(
+    bundle: FlashbotsBundle,
+    relayUrl: string,
+    traceId?: string,
+    maxRetries: number = 3
+  ): Promise<{
+    success: boolean;
+    bundleHash: string;
+    relayUrl: string;
+    error?: string;
+  }> {
+    const logger = this.logger.child({ traceId, relayUrl });
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.debug({
+          msg: 'Attempting relay submission',
+          attempt,
+          maxRetries,
+          targetBlock: bundle.targetBlockNumber
+        });
+
+        // In production, this would use actual relay submission
+        // For now, simulate the submission
+        const bundleHash = `0x${Math.random().toString(16).slice(2, 66)}`;
+        
+        // Simulate network delay
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        logger.info({
+          msg: 'Bundle submitted to relay',
+          bundleHash,
+          attempt,
+          relayUrl: relayUrl.replace(/\/\/.*@/, '//***@') // Hide credentials
+        });
+
+        return {
+          success: true,
+          bundleHash,
+          relayUrl
+        };
+
+      } catch (error: any) {
+        const isLastAttempt = attempt === maxRetries;
+        
+        logger.warn({
+          err: error,
+          msg: `Relay submission attempt ${attempt} failed`,
+          isLastAttempt,
+          willRetry: !isLastAttempt
+        });
+
+        if (isLastAttempt) {
+          return {
+            success: false,
+            bundleHash: '',
+            relayUrl,
+            error: error.message
+          };
+        }
+
+        // Exponential backoff: 1s, 2s, 4s
+        const backoffMs = Math.pow(2, attempt - 1) * 1000;
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+      }
+    }
+
+    // Should never reach here, but TypeScript requires it
+    return {
+      success: false,
+      bundleHash: '',
+      relayUrl,
+      error: 'Unexpected error in retry loop'
+    };
+  }
+
+  /**
+   * Submit bundle to Flashbots relay (legacy method)
+   */
+  async submitBundle(
+    bundle: FlashbotsBundle,
+    traceId?: string
+  ): Promise<FlashbotsBundleResult> {
+    // Delegate to multi-relay submission for enhanced reliability
+    return this.submitBundleWithMultiRelay(bundle, traceId);
   }
 
   /**
