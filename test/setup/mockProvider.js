@@ -3,6 +3,9 @@
 
 const { ethers } = require('ethers');
 
+// Track if mock has been applied
+let mockApplied = false;
+
 // Fixed network data to satisfy getNetwork()
 const FixedNetwork = { name: 'homestead', chainId: 1 };
 
@@ -29,6 +32,13 @@ class MockJsonRpcProvider extends ethers.providers.JsonRpcProvider {
       lastBaseFeePerGas: ethers.BigNumber.from('23000000000') // 23 gwei
     };
   }
+  async getBalance() {
+    return ethers.BigNumber.from('1000000000000000000'); // 1 ETH
+  }
+  async call() {
+    // Return empty result for contract calls
+    return '0x';
+  }
 }
 
 class MockWebSocketProvider extends ethers.providers.WebSocketProvider {
@@ -38,8 +48,18 @@ class MockWebSocketProvider extends ethers.providers.WebSocketProvider {
   async getNetwork() {
     return FixedNetwork;
   }
+  async getBlockNumber() {
+    return 18500000;
+  }
+  async getGasPrice() {
+    return ethers.BigNumber.from('20000000000');
+  }
 }
 
-// Monkey-patch ethers providers globally
-ethers.providers.JsonRpcProvider = MockJsonRpcProvider;
-ethers.providers.WebSocketProvider = MockWebSocketProvider;
+// Apply the mock globally - only once
+if (!mockApplied) {
+  ethers.providers.JsonRpcProvider = MockJsonRpcProvider;
+  ethers.providers.WebSocketProvider = MockWebSocketProvider;
+  mockApplied = true;
+  console.log('🔧 Provider mock applied - network calls disabled for unit tests');
+}
