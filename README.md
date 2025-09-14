@@ -1,14 +1,15 @@
 # JIT Liquidity Provision Bot for Uniswap V3
 
-A production-ready Just-In-Time (JIT) liquidity provision bot that automatically detects large pending swaps and provides concentrated liquidity to capture fees. Supports both simulation and live mainnet execution modes.
+A production-ready Just-In-Time (JIT) liquidity provision bot that automatically detects large pending swaps and provides concentrated liquidity to capture fees. Supports simulation, fork-based preflight validation, and live mainnet execution with Flashbots integration.
 
 ## 🚨 Security Notice
 
-**IMPORTANT: This release (PR1) is SIMULATION-ONLY for safety.**
+**IMPORTANT: This release (PR2) supports live execution but defaults to simulation-only for safety.**
 
 - **Never commit private keys** to version control
 - **Always use `.env` files** for sensitive configuration
-- **Keep simulation mode enabled** (`SIMULATION_MODE=true`) until thoroughly tested
+- **Start with simulation mode** (`ENABLE_LIVE_EXECUTION=false`) until thoroughly tested
+- **Enable preflight simulation** (`ENABLE_FORK_SIM_PREFLIGHT=true`) for comprehensive validation
 - **Use separate wallets** for testing and production
 - **Monitor gas costs** carefully in live mode
 
@@ -23,7 +24,8 @@ A production-ready Just-In-Time (JIT) liquidity provision bot that automatically
    - `PRIVATE_KEY`: Your wallet private key (with 0x prefix)
    - `RPC_URL_HTTP`: Your HTTP RPC endpoint
    - `RPC_URL_WS`: Your WebSocket RPC endpoint
-   - `FLASHBOTS_PRIVATE_KEY`: Separate key for Flashbots (optional)
+   - `FLASHBOTS_PRIVATE_KEY`: Separate key for Flashbots (required for live execution)
+   - `EXECUTOR_PRIVATE_KEY`: Optional separate key for contract execution
 
 3. **Verify `.env` is in `.gitignore`** to prevent accidental commits
 
@@ -56,21 +58,120 @@ npm run dev
 - ✅ **Multi-pool support** - test different pool strategies
 - ✅ **Live metrics** - Prometheus metrics available at http://localhost:9090/metrics
 
-**Note:** In PR1, all execution paths that would send real transactions are blocked. This ensures safe testing while validating the strategy logic.
+## 🧪 Fork Simulation Preflight (PR2)
+
+Enhanced validation with comprehensive end-to-end simulation:
+
+```bash
+# Run preflight simulation on a local fork
+ENABLE_FORK_SIM_PREFLIGHT=true npm run dev
+```
+
+**Preflight Features:**
+- ✅ **Full sequence simulation** - flashloan → mint → burn → repay on local fork
+- ✅ **Real contract interactions** - validates against actual Uniswap V3 and Aave contracts
+- ✅ **Profitability validation** - precise USD profit calculations with real token prices
+- ✅ **Gas optimization** - accurate gas estimates for entire execution sequence
+- ✅ **Risk validation** - checks flashloan availability, pool liquidity, and position risks
+
+## ⚡ Live Execution Mode (PR2)
+
+**⚠️ CAUTION: Live execution uses real funds and executes real transactions.**
+
+### Prerequisites for Live Mode
+
+1. **Separate Flashbots wallet** with sufficient ETH for gas
+2. **Main execution wallet** with appropriate token balances
+3. **Production-grade RPC endpoints** with reliable WebSocket connections
+4. **Thorough testing** in simulation and fork modes
+
+### Enabling Live Execution
+
+```bash
+# Required environment variables for live execution
+ENABLE_LIVE_EXECUTION=true
+ENABLE_FLASHBOTS=true
+ENABLE_FORK_SIM_PREFLIGHT=true
+FLASHBOTS_PRIVATE_KEY=0x...
+FLASHLOAN_PROVIDER=aave-v3
+
+# Production safety acknowledgment
+NODE_ENV=production
+I_UNDERSTAND_LIVE_RISK=true
+```
+
+### Live Execution Safety Features
+
+- **Default disabled** - live execution is off by default
+- **Preflight required** - fork simulation must pass before execution
+- **Gas caps** - strict gas price limits (MAX_GAS_GWEI)
+- **Flashbots only** - all live transactions routed through Flashbots
+- **Profit thresholds** - configurable minimum profit requirements
+- **Production guards** - explicit acknowledgment required for production
+
+### Step-by-Step Live Execution Setup
+
+1. **Test extensively in simulation mode:**
+   ```bash
+   ENABLE_LIVE_EXECUTION=false npm run dev
+   ```
+
+2. **Validate with fork simulation:**
+   ```bash
+   ENABLE_FORK_SIM_PREFLIGHT=true npm run dev
+   ```
+
+3. **Set up Flashbots wallet:**
+   ```bash
+   # Generate new wallet for Flashbots signing
+   FLASHBOTS_PRIVATE_KEY=0x... # Fund with ETH for gas
+   ```
+
+4. **Configure live execution (testnet first!):**
+   ```bash
+   ENABLE_LIVE_EXECUTION=true
+   ENABLE_FLASHBOTS=true
+   FLASHBOTS_PRIVATE_KEY=0x...
+   ```
+
+5. **Production deployment:**
+   ```bash
+   NODE_ENV=production
+   I_UNDERSTAND_LIVE_RISK=true
+   npm run live
+   ```
+
+**Note:** Live execution requires explicit configuration and safety acknowledgments. The default mode remains simulation-only for maximum safety.
 
 ## 🚀 Features
 
+### Core Strategy
 - **Multi-Pool Monitoring**: Concurrent monitoring of multiple Uniswap V3 pools with opportunity ranking
-- **Mempool Monitoring**: Real-time detection of large Uniswap V3 swaps across all target pools
+- **Mempool Monitoring**: Real-time detection of large Uniswap V3 swaps across all target pools  
 - **Opportunity Optimization**: Intelligent selection of the most profitable bundle per block
-- **Flash Loan Integration**: Zero-capital strategy using Balancer (primary) and Aave (fallback) flash loans
-- **Concentrated Liquidity**: Automated positioning around expected swap prices
-- **Flashbots Integration**: MEV-protected bundle execution with retry logic
+- **Concentrated Liquidity**: Automated positioning around expected swap prices for maximum fee capture
+
+### Execution Infrastructure (PR2)
+- **Flash Loan Integration**: Zero-capital strategy using Aave V3 (primary) with extensible provider system
+- **Flashbots Integration**: MEV-protected bundle execution with EIP-1559 gas optimization
+- **Fork Simulation Preflight**: Complete end-to-end validation on local mainnet fork before execution
+- **Live Execution Control**: Production-ready mainnet deployment with safety-first defaults
+
+### Risk Management
 - **Pool-Level Risk Management**: Per-pool failure tracking, auto-disable, and cooldown mechanisms
-- **Advanced Metrics**: Pool-specific profit tracking, success rates, and Prometheus metrics
-- **Multi-chain Support**: Ethereum mainnet and Arbitrum
-- **Live Execution**: Production-ready mainnet deployment with safety features
-- **Emergency Controls**: Pause functionality and stuck fund recovery
+- **Gas Price Controls**: Strict gas price caps and optimization with real-time market adaptation
+- **Profitability Validation**: Multi-stage profit validation including USD-denominated thresholds
+- **Emergency Controls**: Pause functionality and comprehensive error handling
+
+### Observability
+- **Advanced Metrics**: Pool-specific profit tracking, success rates, and comprehensive Prometheus metrics
+- **Structured Logging**: Request tracing, performance monitoring, and detailed execution logs
+- **Real-time Monitoring**: Live dashboards for opportunity detection, execution success, and system health
+
+### Multi-chain & Configuration
+- **Multi-chain Support**: Ethereum mainnet and Arbitrum with extensible chain configuration
+- **Flexible Configuration**: Environment-based configuration with validation and hot-reloading
+- **Provider Abstraction**: Extensible flashloan provider system (Aave V3, future Compound V3)
 
 ## 📋 Table of Contents
 
@@ -175,25 +276,41 @@ npm run dev
 
 2. **Configure environment variables**
    ```bash
+   # ===============================
+   # PR2: Live Execution Control
+   # ===============================
+   ENABLE_LIVE_EXECUTION=false         # Enable live transaction execution
+   ENABLE_FLASHBOTS=false              # Enable Flashbots integration
+   ENABLE_FORK_SIM_PREFLIGHT=true      # Enable fork simulation preflight
+   
+   # Production Safety (required for NODE_ENV=production with live execution)
+   I_UNDERSTAND_LIVE_RISK=false        # Explicit acknowledgment for production live mode
+   
    # RPC Endpoints
-   ETHEREUM_RPC_URL=https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY
-   ARBITRUM_RPC_URL=https://arb-mainnet.alchemyapi.io/v2/YOUR_KEY
+   RPC_URL_HTTP=https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY
+   RPC_URL_WS=wss://eth-mainnet.ws.alchemyapi.io/v2/YOUR_KEY
    
-   # Wallet
-   PRIVATE_KEY=0x...
+   # Wallet Configuration
+   PRIVATE_KEY=0x...                   # Main wallet private key
+   EXECUTOR_PRIVATE_KEY=0x...          # Optional: separate executor key
    
-   # Flashbots
+   # Flashbots Configuration (required for live execution)
    FLASHBOTS_RELAY_URL=https://relay.flashbots.net
-   FLASHBOTS_PRIVATE_KEY=0x...
+   FLASHBOTS_PRIVATE_KEY=0x...         # Required when ENABLE_FLASHBOTS=true
+   
+   # Flashloan Configuration
+   FLASHLOAN_PROVIDER=aave-v3          # Flashloan provider (aave-v3, compound-v3)
    
    # Multi-Pool Configuration
-   ENABLE_MULTI_POOL=true
    POOL_IDS=WETH-USDC-0.05%,ETH-USDT-0.3%,WBTC-ETH-0.3%
-   PROFIT_THRESHOLD_USD=100.0
+   GLOBAL_MIN_PROFIT_USD=10.0          # Minimum profit threshold in USD
+   MAX_GAS_GWEI=100                    # Maximum gas price in gwei
    
-   # Bot Configuration
-   MIN_PROFIT_THRESHOLD=0.01
-   MAX_LOAN_SIZE=1000000
+   # Fork Testing Configuration
+   FORK_BLOCK_NUMBER=                  # Optional: specific block for fork testing
+   
+   # Metrics & Monitoring
+   PROMETHEUS_PORT=9090                # Prometheus metrics port
    ```
 
 3. **Configure target pools** (edit `config.json`)

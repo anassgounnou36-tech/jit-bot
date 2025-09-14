@@ -1,11 +1,13 @@
 import { ethers } from 'ethers';
-import { getConfig, getHttpProvider, getWsProvider, getWallet, validateNoLiveExecution } from '../config';
+import { getConfig, getHttpProvider, getWsProvider, getWallet } from '../config';
 import { initializeLogger, getLogger, createCandidateLogger, logJitOpportunity, logStartupConfiguration, logShutdown, flushLogs } from '../logging/logger';
 import { initializeMetrics } from '../metrics/prom';
 import { getMultiplePoolStates, getCurrentPrice } from '../pool/stateFetcher';
 import { fastSimulate, quickProfitabilityCheck } from '../simulator/fastSim';
-import { validateJitStrategy } from '../simulator/forkSim';
+import { runPreflightSimulation } from '../simulator/forkSim';
 import { getGasPriceGwei, checkGasPrice } from '../util/gasEstimator';
+import { getFlashbotsManager } from '../exec/flashbots';
+import { getFlashloanOrchestrator } from '../exec/flashloan';
 
 export interface PendingSwap {
   hash: string;
@@ -39,6 +41,8 @@ export class JitBot {
   private config: any;
   private logger: any;
   private metrics: any;
+  private flashbotsManager: any;
+  private flashloanOrchestrator: any;
   private isRunning: boolean = false;
   private opportunities: Map<string, JitOpportunity> = new Map();
 
@@ -61,14 +65,24 @@ export class JitBot {
       port: this.config.prometheusPort
     });
     
+    // Initialize PR2 components
+    if (this.config.enableFlashbots) {
+      this.flashbotsManager = getFlashbotsManager();
+    }
+    
+    this.flashloanOrchestrator = getFlashloanOrchestrator();
+    
     // Initialize pools in metrics
     this.initializePoolMetrics();
     
     this.logger.info({
       msg: 'JIT Bot initialized',
-      mode: this.config.simulationMode ? 'simulation' : 'live',
+      mode: this.config.enableLiveExecution ? 'live' : 'simulation',
       chain: this.config.chain,
-      poolCount: this.config.poolIds.length
+      poolCount: this.config.poolIds.length,
+      flashbotsEnabled: this.config.enableFlashbots,
+      preflightEnabled: this.config.enableForkSimPreflight,
+      flashloanProvider: this.config.flashloanProvider
     });
 
     this.setupEventHandlers();
@@ -401,47 +415,126 @@ export class JitBot {
         return;
       }
 
-      // Step 4: Validation simulation
-      const validationResult = await validateJitStrategy({
-        poolAddress: swap.pool,
-        swapAmountIn: ethers.BigNumber.from(swap.amountIn),
-        swapTokenIn: swap.tokenIn,
-        swapTokenOut: swap.tokenOut,
-        tickLower: fastResult.optimalPosition.tickLower,
-        tickUpper: fastResult.optimalPosition.tickUpper,
-        liquidityAmount: fastResult.optimalPosition.liquidity,
-        gasPrice: ethers.BigNumber.from(swap.gasPrice || '20000000000')
-      });
-
-      if (!validationResult.valid) {
-        opportunity.stage = 'failed';
-        opportunity.reason = `Validation failed: ${validationResult.issues.join(', ')}`;
+      // Step 4: Fork Simulation Preflight (PR2)
+      if (this.config.enableForkSimPreflight) {
+        candidateLogger.info({ msg: 'Running fork simulation preflight' });
         
-        candidateLogger.warn({
-          msg: 'Strategy validation failed',
-          issues: validationResult.issues,
-          warnings: validationResult.warnings
-        });
-
-        this.metrics.recordJitFailure(swap.pool, 'validation_failed');
-        return;
+        const preflightStartTime = Date.now();
+        this.metrics.incrementForkSimAttempt(swap.pool);
+        
+        try {
+          const preflightResult = await runPreflightSimulation({
+            poolAddress: swap.pool,
+            swapAmountIn: ethers.BigNumber.from(swap.amountIn),
+            swapTokenIn: swap.tokenIn,
+            swapTokenOut: swap.tokenOut,
+            tickLower: fastResult.optimalPosition.tickLower,
+            tickUpper: fastResult.optimalPosition.tickUpper,
+            liquidityAmount: fastResult.optimalPosition.liquidity,
+            gasPrice: ethers.BigNumber.from(swap.gasPrice || '20000000000')
+          });
+          
+          const preflightDuration = (Date.now() - preflightStartTime) / 1000;
+          this.metrics.recordPreflightDuration(swap.pool, preflightDuration);
+          
+          if (!preflightResult.success) {
+            opportunity.stage = 'failed';
+            opportunity.reason = `Preflight failed: ${preflightResult.revertReason}`;
+            
+            candidateLogger.warn({
+              msg: 'Fork simulation preflight failed',
+              reason: preflightResult.revertReason,
+              validations: preflightResult.validations,
+              simulationSteps: preflightResult.simulationSteps
+            });
+            
+            this.metrics.incrementForkSimFailure(swap.pool, preflightResult.revertReason || 'unknown');
+            this.metrics.recordJitFailure(swap.pool, 'preflight_failed');
+            return;
+          }
+          
+          if (!preflightResult.profitable) {
+            opportunity.stage = 'failed';
+            opportunity.reason = 'Preflight simulation shows unprofitable';
+            
+            candidateLogger.info({
+              msg: 'Preflight simulation unprofitable',
+              expectedNetProfitUSD: preflightResult.expectedNetProfitUSD,
+              gasUsed: preflightResult.gasUsed,
+              breakdown: {
+                flashloanFee: ethers.utils.formatEther(preflightResult.breakdown.flashloanFee),
+                feesCollected: ethers.utils.formatEther(preflightResult.breakdown.estimatedFeesCollected),
+                gasCost: ethers.utils.formatEther(preflightResult.breakdown.estimatedGasCost)
+              }
+            });
+            
+            this.metrics.incrementForkSimFailure(swap.pool, 'unprofitable');
+            this.metrics.recordJitFailure(swap.pool, 'preflight_unprofitable');
+            return;
+          }
+          
+          // Successful preflight
+          this.metrics.incrementForkSimSuccess(swap.pool);
+          this.metrics.recordExpectedProfit(swap.pool, preflightResult.expectedNetProfitUSD);
+          
+          candidateLogger.info({
+            msg: 'Preflight simulation successful',
+            expectedNetProfitUSD: preflightResult.expectedNetProfitUSD,
+            gasUsed: preflightResult.gasUsed,
+            validations: preflightResult.validations
+          });
+          
+          // Update opportunity with preflight results
+          opportunity.estimatedProfitUsd = preflightResult.expectedNetProfitUSD;
+          
+        } catch (error: any) {
+          candidateLogger.error({
+            err: error,
+            msg: 'Preflight simulation error'
+          });
+          
+          this.metrics.incrementForkSimFailure(swap.pool, 'simulation_error');
+          this.metrics.recordJitFailure(swap.pool, 'preflight_error');
+          
+          opportunity.stage = 'failed';
+          opportunity.reason = `Preflight error: ${error.message}`;
+          return;
+        }
       }
-
-      // Step 5: EXECUTION BLOCKED IN PR1
-      opportunity.stage = 'failed';
-      opportunity.reason = 'Live execution blocked in PR1 (simulation-only mode)';
       
-      candidateLogger.info({
-        msg: 'Opportunity validated but execution blocked',
-        note: 'PR1 is simulation-only - no live transactions',
-        estimatedProfitUsd: fastResult.expectedNetProfitUsd
-      });
-
-      // This is where execution would happen in PR2
-      validateNoLiveExecution('JIT bundle execution');
-
-      // Record as blocked live execution failure
-      this.metrics.recordJitFailure(swap.pool, 'blocked_live_execution');
+      // Step 5: Live Execution (PR2)
+      if (this.config.enableLiveExecution && this.config.enableFlashbots) {
+        candidateLogger.info({ msg: 'Proceeding with live execution' });
+        
+        try {
+          await this.executeLiveJitStrategy(opportunity, fastResult, candidateLogger);
+        } catch (error: any) {
+          candidateLogger.error({
+            err: error,
+            msg: 'Live execution failed'
+          });
+          
+          opportunity.stage = 'failed';
+          opportunity.reason = `Live execution error: ${error.message}`;
+          this.metrics.recordJitFailure(swap.pool, 'execution_error');
+        }
+      } else {
+        // Simulation mode - log what would have been executed
+        opportunity.stage = 'failed';
+        opportunity.reason = this.config.enableLiveExecution ? 
+          'Live execution disabled (ENABLE_FLASHBOTS=false)' :
+          'Live execution disabled (ENABLE_LIVE_EXECUTION=false)';
+        
+        candidateLogger.info({
+          msg: 'Opportunity validated but execution blocked',
+          note: 'Live execution is disabled',
+          enableLiveExecution: this.config.enableLiveExecution,
+          enableFlashbots: this.config.enableFlashbots,
+          estimatedProfitUsd: opportunity.estimatedProfitUsd
+        });
+        
+        this.metrics.recordJitFailure(swap.pool, 'live_execution_disabled');
+      }
 
     } catch (error: any) {
       opportunity.stage = 'failed';
@@ -475,15 +568,127 @@ export class JitBot {
     }
   }
 
+  /**
+   * Execute live JIT strategy using Flashbots and flashloans (PR2)
+   */
+  private async executeLiveJitStrategy(
+    opportunity: JitOpportunity,
+    fastResult: any,
+    candidateLogger: any
+  ): Promise<void> {
+    const traceId = opportunity.traceId;
+    
+    candidateLogger.info({
+      msg: 'Starting live JIT strategy execution',
+      traceId,
+      poolAddress: opportunity.poolAddress
+    });
+
+    try {
+      // Step 1: Build flashloan transaction
+      const flashloanTx = await this.flashloanOrchestrator.buildJitFlashloanTransaction(
+        opportunity.tokenIn,
+        opportunity.amountIn,
+        '0x' + '1'.repeat(40), // Mock JIT executor address
+        {
+          poolAddress: opportunity.poolAddress,
+          amountIn: opportunity.amountIn,
+          tokenIn: opportunity.tokenIn,
+          tokenOut: opportunity.tokenOut,
+          tickLower: fastResult.optimalPosition.tickLower,
+          tickUpper: fastResult.optimalPosition.tickUpper,
+          liquidity: fastResult.optimalPosition.liquidity
+        }
+      );
+
+      candidateLogger.info({
+        msg: 'Flashloan transaction built',
+        gasEstimate: flashloanTx.gasEstimate,
+        flashloanFee: ethers.utils.formatEther(flashloanTx.flashloanFee)
+      });
+
+      // Step 2: Get current base fee for gas optimization
+      const baseFee = await this.flashbotsManager.getCurrentBaseFee();
+      const optimizedGas = await this.flashbotsManager.createOptimizedGasFees(baseFee);
+
+      // Step 3: Create Flashbots bundle
+      const targetBlock = await this.httpProvider.getBlockNumber() + 1;
+      const bundle = await this.flashbotsManager.createBundle([
+        {
+          to: flashloanTx.to,
+          data: flashloanTx.data,
+          value: flashloanTx.value,
+          gasLimit: flashloanTx.gasEstimate,
+          maxFeePerGas: optimizedGas.maxFeePerGas,
+          maxPriorityFeePerGas: optimizedGas.maxPriorityFeePerGas
+        }
+      ], targetBlock, traceId);
+
+      candidateLogger.info({
+        msg: 'Flashbots bundle created',
+        targetBlock,
+        gasSettings: {
+          maxFeePerGas: ethers.utils.formatUnits(optimizedGas.maxFeePerGas, 'gwei'),
+          maxPriorityFeePerGas: ethers.utils.formatUnits(optimizedGas.maxPriorityFeePerGas, 'gwei')
+        }
+      });
+
+      // Step 4: Simulate bundle
+      const simulationResult = await this.flashbotsManager.simulateBundle(bundle, traceId);
+      
+      if (!simulationResult.simulation?.success) {
+        throw new Error(`Bundle simulation failed: ${simulationResult.simulation?.error}`);
+      }
+
+      candidateLogger.info({
+        msg: 'Bundle simulation successful',
+        gasUsed: simulationResult.simulation.gasUsed,
+        effectiveGasPrice: ethers.utils.formatUnits(simulationResult.simulation.effectiveGasPrice, 'gwei')
+      });
+
+      // Step 5: Submit bundle to Flashbots
+      const submissionResult = await this.flashbotsManager.submitBundle(bundle, traceId);
+      
+      if (submissionResult.submission?.success) {
+        opportunity.stage = 'validated';
+        opportunity.profitable = true;
+        opportunity.reason = 'Live execution submitted successfully';
+        
+        candidateLogger.info({
+          msg: 'Bundle submitted to Flashbots successfully',
+          bundleHash: submissionResult.bundleHash,
+          targetBlock: submissionResult.submission.targetBlock
+        });
+        
+        this.metrics.recordJitSuccess(opportunity.poolAddress);
+      } else {
+        throw new Error(`Bundle submission failed: ${submissionResult.submission?.error}`);
+      }
+
+    } catch (error: any) {
+      candidateLogger.error({
+        err: error,
+        msg: 'Live JIT strategy execution failed'
+      });
+      
+      opportunity.stage = 'failed';
+      opportunity.reason = `Live execution failed: ${error.message}`;
+      
+      throw error;
+    }
+  }
+
   private keepAlive(): void {
     // Status logging every 60 seconds
     setInterval(() => {
       if (this.isRunning) {
         this.logger.info({
           msg: 'JIT Bot status',
-          mode: 'SIMULATION',
+          mode: this.config.enableLiveExecution ? 'LIVE' : 'SIMULATION',
           opportunities: this.opportunities.size,
-          activelyMonitoring: this.config.poolIds.length
+          activelyMonitoring: this.config.poolIds.length,
+          flashbotsEnabled: this.config.enableFlashbots,
+          preflightEnabled: this.config.enableForkSimPreflight
         });
       }
     }, 60000);
@@ -527,7 +732,7 @@ export class JitBot {
   getStatus(): any {
     return {
       isRunning: this.isRunning,
-      mode: this.config.simulationMode ? 'simulation' : 'live',
+      mode: this.config.enableLiveExecution ? 'live' : 'simulation',
       chain: this.config.chain,
       walletAddress: this.wallet.address,
       opportunities: Array.from(this.opportunities.values()),
@@ -535,7 +740,11 @@ export class JitBot {
         poolIds: this.config.poolIds,
         globalMinProfitUsd: this.config.globalMinProfitUsd,
         maxGasGwei: this.config.maxGasGwei,
-        prometheusPort: this.config.prometheusPort
+        prometheusPort: this.config.prometheusPort,
+        enableLiveExecution: this.config.enableLiveExecution,
+        enableFlashbots: this.config.enableFlashbots,
+        enableForkSimPreflight: this.config.enableForkSimPreflight,
+        flashloanProvider: this.config.flashloanProvider
       },
       metricsUrl: this.metrics.getMetricsUrl()
     };
@@ -565,15 +774,17 @@ if (require.main === module) {
       console.log('Usage: ts-node src/bot/index.ts [start|status]');
       console.log('');
       console.log('Commands:');
-      console.log('  start   - Start the JIT bot in simulation mode');
+      console.log('  start   - Start the JIT bot');
       console.log('  status  - Show bot status');
       console.log('');
       console.log('Environment:');
-      console.log('  SIMULATION_MODE=true - Run in simulation mode (default, required in PR1)');
+      console.log('  ENABLE_LIVE_EXECUTION=false - Enable live transaction execution (default: false)');
+      console.log('  ENABLE_FLASHBOTS=false - Enable Flashbots integration (default: false)');
+      console.log('  ENABLE_FORK_SIM_PREFLIGHT=true - Enable fork simulation preflight (default: true)');
       console.log('  NODE_ENV=development - Development mode (default)');
-      console.log('  NODE_ENV=production - Production mode (with SIMULATION_MODE=true)');
+      console.log('  NODE_ENV=production - Production mode (requires I_UNDERSTAND_LIVE_RISK=true for live execution)');
       console.log('');
-      console.log('Note: Live execution is blocked in PR1 for safety.');
+      console.log('Safety: Live execution is disabled by default. Set appropriate flags to enable.');
       process.exit(1);
   }
 }
