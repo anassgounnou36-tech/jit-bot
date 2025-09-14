@@ -316,7 +316,7 @@ export class AaveAdapter {
 let aaveAdapter: AaveAdapter | null = null;
 
 export function getAaveAdapter(provider?: ethers.providers.Provider): AaveAdapter {
-  if (!aaveAdapter || provider) {
+  if (!aaveAdapter) {
     if (!provider) {
       throw new Error('Provider required for first-time Aave adapter creation');
     }

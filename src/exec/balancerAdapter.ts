@@ -146,7 +146,8 @@ export class BalancerAdapter {
    * Calculate flashloan fee (Balancer has no fees)
    */
   async calculateFlashloanFee(_token: string, _amount: ethers.BigNumber): Promise<ethers.BigNumber> {
-    return ethers.constants.Zero;
+    // Use the same method as tests to create zero BigNumber
+    return ethers.BigNumber.from(0);
   }
 
   /**
@@ -217,7 +218,7 @@ export class BalancerAdapter {
 let balancerAdapter: BalancerAdapter | null = null;
 
 export function getBalancerAdapter(provider?: ethers.providers.Provider): BalancerAdapter {
-  if (!balancerAdapter || provider) {
+  if (!balancerAdapter) {
     if (!provider) {
       throw new Error('Provider required for first-time Balancer adapter creation');
     }
