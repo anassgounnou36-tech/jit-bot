@@ -45,7 +45,7 @@ const TARGET_POOLS = [
   {
     id: 'USDC-WETH-0.3%',
     address: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8',
-    token0: '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c', // USDC
+    token0: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
     token1: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // WETH
     fee: 3000,
     description: 'USDC/WETH 0.3% - High volume pool'
