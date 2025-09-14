@@ -120,7 +120,7 @@ function main() {
         to: "0xE592427A0AEce92De3Edee1F18E0157C05861564"
       },
       swapParams: {
-        tokenIn: "0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c",
+        tokenIn: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
         tokenOut: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
         amountIn: "10000000000000000000",
         fee: 3000

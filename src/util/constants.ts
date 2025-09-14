@@ -15,7 +15,7 @@ export const TOKEN_ADDRESSES = {
  * Known incorrect addresses that should be auto-corrected
  */
 export const INCORRECT_ADDRESSES = {
-  USDC_INCORRECT: '0xa0b86a33e6441b80b05fdc68f34f8c9c31c8e9a' // Incorrect USDC address to guard against
+  USDC_INCORRECT: '0xA0b86a33E6427fF2B5B8b9a5e5D17b5c4c6f6b7c' // Incorrect USDC address to guard against
 } as const;
 
 /**
