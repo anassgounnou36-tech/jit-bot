@@ -30,6 +30,7 @@
     "lint:solidity": "npm run build",
     "slither": "slither contracts/ --json slither-report.json || echo 'Slither analysis completed'",
     "typecheck": "tsc --noEmit",
+    "test:ci-local": "./scripts/test-ci-local.sh",
     "ci": "npm run lint && npm run typecheck && npm run test:unit",
     "ci:e2e": "npm run test:fork && npm run test:unit && npm run slither"
   },
