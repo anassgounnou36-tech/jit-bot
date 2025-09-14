@@ -98,3 +98,104 @@ groups:
         annotations:
           summary: "High memory usage"
           description: "Memory usage is {{ $value }}% on {{ $labels.instance }}"
+
+      # Production Hardening Alerts
+      - alert: FlashbotsHighBundleFailureRate
+        expr: (jit_bot_flashbots_bundles_failed_total / jit_bot_flashbots_bundles_submitted_total) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: flashbots
+        annotations:
+          summary: "Flashbots bundle failure rate too high"
+          description: "Bundle failure rate is {{ $value | humanizePercentage }} over the last 5 minutes (threshold: 5%)"
+
+      - alert: PoolDisabledTooLong
+        expr: jit_bot_pool_disabled{pool=~".+"} == 1
+        for: 30m
+        labels:
+          severity: warning
+          component: pool-management
+        annotations:
+          summary: "Pool {{ $labels.pool }} disabled for too long"
+          description: "Pool {{ $labels.pool }} has been disabled for more than 30 minutes"
+
+      - alert: FlashloanProviderFallbacks
+        expr: increase(jit_bot_flashloan_fallback_total[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+          component: flashloan
+        annotations:
+          summary: "High number of flashloan provider fallbacks"
+          description: "{{ $value }} fallbacks from Balancer to Aave in the last 5 minutes (indicates Balancer liquidity issues)"
+
+      - alert: VictimTransactionMissing
+        expr: jit_bot_bundles_without_victim_tx_total > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: bundle-ordering
+        annotations:
+          summary: "Bundles created without victim transactions"
+          description: "{{ $value }} bundles were created without victim transactions (may affect execution ordering)"
+
+      - alert: OnChainProfitGuardTriggered
+        expr: increase(jit_bot_profit_guard_reverts_total[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: profit-guard
+        annotations:
+          summary: "On-chain profit guard triggered"
+          description: "{{ $value }} transactions reverted due to insufficient profit - check strategy profitability"
+
+      - alert: BalancerLiquidityLow
+        expr: jit_bot_balancer_vault_balance_eth < 1000
+        for: 10m
+        labels:
+          severity: warning
+          component: balancer
+        annotations:
+          summary: "Balancer vault liquidity running low"
+          description: "Balancer vault has only {{ $value }} ETH available (threshold: 1000 ETH)"
+
+      - alert: AaveFlashloanFeesHigh
+        expr: jit_bot_aave_flashloan_fee_percentage > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          component: aave
+        annotations:
+          summary: "Aave flashloan fees unusually high"
+          description: "Aave flashloan fees are {{ $value }}% (typical: 0.05%)"
+
+      - alert: JitExecutorContractPaused
+        expr: jit_bot_executor_paused == 1
+        for: 0m
+        labels:
+          severity: critical
+          component: contract
+        annotations:
+          summary: "JIT Executor contract is paused"
+          description: "The JIT Executor contract has been paused - no executions possible"
+
+      - alert: SimulationVsActualProfitDeviation
+        expr: abs(jit_bot_actual_profit_usd - jit_bot_simulated_profit_usd) / jit_bot_simulated_profit_usd > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          component: simulation
+        annotations:
+          summary: "Large deviation between simulated and actual profit"
+          description: "Actual profit deviates by {{ $value | humanizePercentage }} from simulation (may indicate inaccurate modeling)"
+
+      - alert: RawTransactionCaptureFailure
+        expr: increase(jit_bot_raw_tx_capture_failures_total[5m]) > 3
+        for: 2m
+        labels:
+          severity: warning
+          component: mempool
+        annotations:
+          summary: "Failing to capture raw transaction bytes"
+          description: "{{ $value }} failures to capture raw transaction bytes in last 5 minutes (may affect bundle ordering)"

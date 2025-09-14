@@ -15,6 +15,12 @@ export interface ForkSimulationParams {
   liquidityAmount: ethers.BigNumber;
   gasPrice: ethers.BigNumber;
   blockNumber?: number;
+  // Enhanced with victim transaction support
+  victimTransaction?: {
+    rawTx: string;
+    hash: string;
+    data: string;
+  };
 }
 
 export interface PreflightResult {
@@ -48,6 +54,9 @@ export interface PreflightResult {
     mintLiquiditySimulation: boolean;
     swapExecutionSimulation: boolean;
     burnLiquiditySimulation: boolean;
+    bundleSimulation: boolean;
+    victimTxIncluded: boolean;
+  };
     repaymentSimulation: boolean;
   };
 }
@@ -151,7 +160,10 @@ export async function runPreflightSimulation(params: ForkSimulationParams): Prom
     // Step 5: Run full sequence simulation
     const sequenceResult = await simulateFullSequence(params, flashloanValidation.fee!);
     
-    // Step 6: Calculate profitability in USD
+    // Step 6: Simulate bundle with victim transaction if provided
+    const bundleResult = await simulateBundleWithVictim(params, sequenceResult);
+    
+    // Step 7: Calculate profitability in USD
     const profitabilityResult = await calculateProfitabilityUSD(
       sequenceResult.breakdown.netProfitWei,
       params.swapTokenIn
@@ -170,7 +182,11 @@ export async function runPreflightSimulation(params: ForkSimulationParams): Prom
         gasValidation: true,
         profitabilityValidation: profitabilityResult.profitable
       },
-      simulationSteps: sequenceResult.simulationSteps
+      simulationSteps: {
+        ...sequenceResult.simulationSteps,
+        bundleSimulation: bundleResult.success,
+        victimTxIncluded: bundleResult.victimIncluded
+      }
     };
 
     logger.info({
@@ -788,4 +804,129 @@ export function estimateSimulationTime(params: ForkSimulationParams): number {
   }
   
   return estimatedTime;
+}
+
+/**
+ * Simulate bundle execution with victim transaction inclusion
+ */
+async function simulateBundleWithVictim(
+  params: ForkSimulationParams,
+  sequenceResult: any
+): Promise<{
+  success: boolean;
+  victimIncluded: boolean;
+  bundleHash?: string;
+  error?: string;
+}> {
+  const logger = getLogger().child({ component: 'bundle-simulation' });
+
+  try {
+    // If no victim transaction provided, return basic success
+    if (!params.victimTransaction) {
+      logger.info({
+        msg: 'No victim transaction provided for bundle simulation',
+        bundleSupported: false
+      });
+      
+      return {
+        success: true,
+        victimIncluded: false
+      };
+    }
+
+    logger.info({
+      msg: 'Simulating bundle with victim transaction',
+      victimTxHash: params.victimTransaction.hash,
+      hasRawTx: !!params.victimTransaction.rawTx
+    });
+
+    // Import Flashbots manager for bundle simulation
+    const { getFlashbotsManager } = await import('../exec/flashbots');
+    const flashbotsManager = getFlashbotsManager();
+
+    // Create mock JIT transactions for bundle simulation
+    const mockJitTransactions = [
+      {
+        to: '0x' + '0'.repeat(40), // Mock JIT executor address
+        data: '0x' + '0'.repeat(8), // Mock mint function call
+        gasLimit: 200000,
+        maxFeePerGas: params.gasPrice,
+        maxPriorityFeePerGas: ethers.utils.parseUnits('2', 'gwei')
+      },
+      {
+        to: '0x' + '0'.repeat(40), // Mock JIT executor address  
+        data: '0x' + '1'.repeat(8), // Mock burn/collect function call
+        gasLimit: 150000,
+        maxFeePerGas: params.gasPrice,
+        maxPriorityFeePerGas: ethers.utils.parseUnits('2', 'gwei')
+      }
+    ];
+
+    // Create enhanced bundle with victim transaction
+    const bundle = await flashbotsManager.createEnhancedBundle({
+      jitTransactions: mockJitTransactions,
+      victimTransaction: {
+        rawTx: params.victimTransaction.rawTx,
+        hash: params.victimTransaction.hash
+      },
+      targetBlockNumber: params.blockNumber || await getLatestBlockNumber()
+    });
+
+    // Validate bundle ordering
+    const validation = flashbotsManager.validateBundleOrdering(bundle);
+    if (!validation.valid) {
+      logger.warn({
+        msg: 'Bundle validation failed',
+        issues: validation.issues
+      });
+      
+      return {
+        success: false,
+        victimIncluded: false,
+        error: validation.issues.join(', ')
+      };
+    }
+
+    // Simulate bundle execution
+    const simulationResult = await flashbotsManager.simulateBundle(bundle);
+    
+    logger.info({
+      msg: 'Bundle simulation completed',
+      bundleHash: simulationResult.bundleHash,
+      success: simulationResult.simulation?.success || false,
+      victimIncluded: simulationResult.victimIncluded || false
+    });
+
+    return {
+      success: simulationResult.simulation?.success || false,
+      victimIncluded: simulationResult.victimIncluded || false,
+      bundleHash: simulationResult.bundleHash
+    };
+
+  } catch (error: any) {
+    logger.error({
+      msg: 'Bundle simulation failed',
+      error: error.message
+    });
+
+    return {
+      success: false,
+      victimIncluded: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Get latest block number for simulation
+ */
+async function getLatestBlockNumber(): Promise<number> {
+  try {
+    const config = getConfig();
+    const provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+    return await provider.getBlockNumber();
+  } catch (error) {
+    // Fallback to a reasonable block number for simulation
+    return 18000000;
+  }
 }

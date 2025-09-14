@@ -1,6 +1,8 @@
 import { ethers } from 'ethers';
 import { getConfig } from '../config';
 import { getLogger } from '../logging/logger';
+import { getBalancerAdapter } from './balancerAdapter';
+import { getAaveAdapter } from './aaveAdapter';
 
 /**
  * Interface for flashloan providers
@@ -318,6 +320,133 @@ export class FlashloanOrchestrator {
       providers: Array.from(this.providers.keys()),
       defaultProvider: this.config.flashloanProvider
     });
+  }
+
+  /**
+   * Select optimal flashloan provider based on liquidity availability
+   * Prefers Balancer (no fees) over Aave when sufficient liquidity exists
+   */
+  async selectOptimalProvider(
+    token: string, 
+    amount: ethers.BigNumber,
+    provider?: ethers.providers.Provider
+  ): Promise<{
+    providerType: 'balancer' | 'aave';
+    adapter: any;
+    fee: ethers.BigNumber;
+    reason: string;
+  }> {
+    this.logger.info({
+      msg: 'Selecting optimal flashloan provider',
+      token,
+      amount: ethers.utils.formatEther(amount)
+    });
+
+    try {
+      // Always try Balancer first (no fees)
+      const balancerAdapter = getBalancerAdapter(provider);
+      const balancerSufficient = await balancerAdapter.hassufficientLiquidity(token, amount);
+      
+      if (balancerSufficient) {
+        this.logger.info({
+          msg: 'Selected Balancer as flashloan provider',
+          reason: 'Sufficient liquidity and no fees'
+        });
+        
+        return {
+          providerType: 'balancer',
+          adapter: balancerAdapter,
+          fee: ethers.BigNumber.from(0),
+          reason: 'Balancer has sufficient liquidity with no fees'
+        };
+      }
+
+      // Fallback to Aave
+      const aaveAdapter = getAaveAdapter(provider);
+      const aaveSufficient = await aaveAdapter.hasSufficientLiquidity(token, amount);
+      
+      if (aaveSufficient) {
+        const aaveFee = await aaveAdapter.calculateFlashloanFee(token, amount);
+        
+        this.logger.info({
+          msg: 'Selected Aave as flashloan provider',
+          reason: 'Balancer insufficient, Aave has liquidity',
+          fee: ethers.utils.formatEther(aaveFee)
+        });
+        
+        return {
+          providerType: 'aave',
+          adapter: aaveAdapter,
+          fee: aaveFee,
+          reason: 'Balancer insufficient liquidity, fallback to Aave'
+        };
+      }
+
+      throw new Error('No flashloan provider has sufficient liquidity');
+      
+    } catch (error: any) {
+      this.logger.error({
+        msg: 'Failed to select flashloan provider',
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Enhanced flashloan parameters validation with provider selection
+   */
+  async validateFlashloanParams(
+    token: string,
+    amount: ethers.BigNumber,
+    provider?: ethers.providers.Provider
+  ): Promise<{
+    valid: boolean;
+    issues: string[];
+    fee?: ethers.BigNumber;
+    selectedProvider?: 'balancer' | 'aave';
+    adapter?: any;
+  }> {
+    const issues: string[] = [];
+
+    try {
+      // Basic validation
+      if (!ethers.utils.isAddress(token)) {
+        issues.push('Invalid token address');
+      }
+
+      if (amount.lte(0)) {
+        issues.push('Amount must be positive');
+      }
+
+      // Select optimal provider
+      const selection = await this.selectOptimalProvider(token, amount, provider);
+      
+      this.logger.info({
+        msg: 'Flashloan validation completed',
+        token,
+        amount: ethers.utils.formatEther(amount),
+        selectedProvider: selection.providerType,
+        fee: ethers.utils.formatEther(selection.fee),
+        valid: issues.length === 0
+      });
+
+      return {
+        valid: issues.length === 0,
+        issues,
+        fee: selection.fee,
+        selectedProvider: selection.providerType,
+        adapter: selection.adapter
+      };
+
+    } catch (error: any) {
+      issues.push(`Provider selection failed: ${error.message}`);
+      
+      return {
+        valid: false,
+        issues
+      };
+    }
   }
   
   /**

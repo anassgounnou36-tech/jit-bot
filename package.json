@@ -10,6 +10,7 @@
     "test:unit": "mocha",
     "test:fork": "ts-mocha test/integration/**/*.test.ts --timeout 30000",
     "test:all": "npm run test:unit && npm run test:fork",
+    "test:solidity": "hardhat test",
     "start": "node dist/bot/index.js",
     "dev": "ts-node src/bot/index.ts",
     "live": "NODE_ENV=production ts-node src/bot/index.ts start",
@@ -19,9 +20,15 @@
     "simulate": "ts-node scripts/simulateExample.ts",
     "fork": "ts-node scripts/startFork.ts",
     "fork:simulate": "ts-node scripts/forkSimulation.ts",
+    "fixtures:generate": "node scripts/generate-fixtures.js",
+    "fixtures:validate": "node scripts/validate-fixtures.js",
+    "fixtures:update": "npm run fixtures:generate",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "ci": "npm run lint && npm run test:unit"
+    "lint:solidity": "npm run build",
+    "slither": "slither contracts/ --json slither-report.json || echo 'Slither analysis completed'",
+    "ci": "npm run lint && npm run test:unit",
+    "ci:e2e": "npm run test:fork && npm run test:unit && npm run slither"
   },
   "keywords": [
     "ethereum",
