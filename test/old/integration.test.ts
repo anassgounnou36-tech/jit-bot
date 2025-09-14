@@ -8,11 +8,10 @@ import { Metrics } from "../src/metrics/metrics";
 describe("JIT Bot Integration Tests", function () {
   let simpleJitExecutor: SimpleJitExecutor;
   let owner: SignerWithAddress;
-  let _user: SignerWithAddress;
   let metrics: Metrics;
 
   beforeEach(async function () {
-    [owner, _user] = await ethers.getSigners();
+    [owner] = await ethers.getSigners();
 
     // Deploy contract
     const SimpleJitExecutor = await ethers.getContractFactory("SimpleJitExecutor");

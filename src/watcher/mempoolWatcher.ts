@@ -207,58 +207,37 @@ export class MempoolWatcher extends EventEmitter {
    */
   async getRawTransactionBytes(txHash: string): Promise<string | undefined> {
     try {
-      this.logger.debug({
-        msg: 'Attempting to get raw transaction bytes',
-        txHash,
-        strategy: 'multi-approach'
-      });
+      console.log('Attempting to get raw transaction bytes', { txHash, strategy: 'multi-approach' });
 
       // Strategy 1: Try direct RPC method (if provider supports it)
       const rawTx = await this.tryDirectRawTxMethod(txHash);
       if (rawTx) {
-        this.logger.info({
-          msg: 'Raw transaction captured via direct RPC',
-          txHash,
-          rawTxLength: rawTx.length
-        });
+        console.log('Raw transaction captured via direct RPC', { txHash, rawTxLength: rawTx.length });
         return rawTx;
       }
 
       // Strategy 2: Try reconstructing from transaction object
       const reconstructed = await this.tryReconstructRawTx(txHash);
       if (reconstructed) {
-        this.logger.info({
-          msg: 'Raw transaction reconstructed from tx object',
-          txHash,
-          rawTxLength: reconstructed.length
-        });
+        console.log('Raw transaction reconstructed from tx object', { txHash, rawTxLength: reconstructed.length });
         return reconstructed;
       }
 
       // Strategy 3: Return from cache if available
       const cached = this.getCachedRawTx(txHash);
       if (cached) {
-        this.logger.info({
-          msg: 'Raw transaction retrieved from cache',
-          txHash,
-          rawTxLength: cached.length
-        });
+        console.log('Raw transaction retrieved from cache', { txHash, rawTxLength: cached.length });
         return cached;
       }
 
-      this.logger.warn({
-        msg: 'Failed to capture raw transaction bytes',
+      console.warn('Failed to capture raw transaction bytes', { 
         txHash,
         note: 'Bundle creation may need to fall back to transaction reconstruction'
       });
       
       return undefined;
     } catch (error: any) {
-      this.logger.error({
-        err: error,
-        msg: 'Error getting raw transaction bytes',
-        txHash
-      });
+      console.error('Error getting raw transaction bytes', { txHash, error: error.message });
       return undefined;
     }
   }
@@ -273,11 +252,7 @@ export class MempoolWatcher extends EventEmitter {
       const rawTx = await this.provider.send('eth_getRawTransactionByHash', [txHash]);
       return rawTx;
     } catch (error: any) {
-      this.logger.debug({
-        msg: 'Direct raw tx method not supported',
-        txHash,
-        error: error.message
-      });
+      console.log('Direct raw tx method not supported', { txHash, error: error.message });
       return undefined;
     }
   }
@@ -296,20 +271,12 @@ export class MempoolWatcher extends EventEmitter {
       if (tx.type === 2) {
         // This would require ethers.js transaction serialization
         // For now, return undefined - would need full implementation
-        this.logger.debug({
-          msg: 'EIP-1559 transaction reconstruction not implemented',
-          txHash,
-          type: tx.type
-        });
+        console.log('EIP-1559 transaction reconstruction not implemented', { txHash, type: tx.type });
       }
 
       return undefined;
     } catch (error: any) {
-      this.logger.debug({
-        msg: 'Transaction reconstruction failed',
-        txHash,
-        error: error.message
-      });
+      console.log('Transaction reconstruction failed', { txHash, error: error.message });
       return undefined;
     }
   }
@@ -317,7 +284,7 @@ export class MempoolWatcher extends EventEmitter {
   /**
    * Get cached raw transaction if available
    */
-  private getCachedRawTx(txHash: string): string | undefined {
+  private getCachedRawTx(_txHash: string): string | undefined {
     // This would integrate with a caching layer
     // For now, return undefined
     return undefined;
@@ -339,8 +306,7 @@ export class MempoolWatcher extends EventEmitter {
       const captureMethod = rawTx ? 'direct' : 'unavailable';
       
       const processingTime = Date.now() - startTime;
-      this.logger.debug({
-        msg: 'Transaction processed with raw capture attempt',
+      console.log('Transaction processed with raw capture attempt', {
         txHash: tx.hash,
         rawCaptured: !!rawTx,
         captureMethod,
@@ -353,11 +319,7 @@ export class MempoolWatcher extends EventEmitter {
         captureMethod
       };
     } catch (error: any) {
-      this.logger.error({
-        err: error,
-        msg: 'Error in enhanced transaction processing',
-        txHash: tx.hash
-      });
+      console.error('Error in enhanced transaction processing', { txHash: tx.hash, error: error.message });
 
       return {
         transaction: tx,
