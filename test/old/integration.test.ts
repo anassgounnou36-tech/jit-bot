@@ -14,11 +14,11 @@ describe("JIT Bot Integration Tests", function () {
     [owner] = await ethers.getSigners();
 
     // Deploy contract
-    const SimpleJitExecutor = await ethers.getContractFactory("SimpleJitExecutor");
+    const SimpleJitExecutorFactory = await ethers.getContractFactory("SimpleJitExecutor");
     const minProfitThreshold = ethers.utils.parseEther("0.01"); // 0.01 ETH
     const maxLoanSize = ethers.utils.parseEther("1000"); // 1000 ETH
 
-    simpleJitExecutor = await SimpleJitExecutor.deploy(
+    simpleJitExecutor = await SimpleJitExecutorFactory.deploy(
       minProfitThreshold,
       maxLoanSize
     );
@@ -50,11 +50,11 @@ describe("JIT Bot Integration Tests", function () {
       process.env.DEPLOYMENT_NETWORK = "fork";
 
       // Deploy new contract with environment parameters
-      const SimpleJitExecutor = await ethers.getContractFactory("SimpleJitExecutor");
+      const SimpleJitExecutorFactory = await ethers.getContractFactory("SimpleJitExecutor");
       const minProfit = ethers.utils.parseEther(process.env.MIN_PROFIT_THRESHOLD);
       const maxLoan = ethers.utils.parseEther(process.env.MAX_LOAN_SIZE);
 
-      const forkContract = await SimpleJitExecutor.deploy(minProfit, maxLoan);
+      const forkContract = await SimpleJitExecutorFactory.deploy(minProfit, maxLoan);
       await forkContract.deployed();
 
       expect(await forkContract.minProfitThreshold()).to.equal(ethers.utils.parseEther("0.005"));

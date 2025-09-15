@@ -349,7 +349,6 @@ export class FlashloanOrchestrator {
 
       // Use a mock provider if none provided and we're in test mode
       if (!provider && process.env.NODE_ENV === 'test') {
-        const { ethers } = require('ethers');
         provider = new ethers.providers.JsonRpcProvider('http://localhost:8545');
       }
 

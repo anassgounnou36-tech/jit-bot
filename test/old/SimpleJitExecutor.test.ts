@@ -10,8 +10,8 @@ describe("SimpleJitExecutor", function () {
   beforeEach(async function () {
     [owner, addr1] = await ethers.getSigners();
 
-    const SimpleJitExecutor = await ethers.getContractFactory("SimpleJitExecutor");
-    jitExecutor = await SimpleJitExecutor.deploy(
+    const SimpleJitExecutorFactory = await ethers.getContractFactory("SimpleJitExecutor");
+    jitExecutor = await SimpleJitExecutorFactory.deploy(
       ethers.utils.parseEther("0.01"), // minProfitThreshold
       ethers.utils.parseEther("1000")  // maxLoanSize
     );
