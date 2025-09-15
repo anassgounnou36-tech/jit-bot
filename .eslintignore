@@ -1,0 +1,10 @@
+# Node modules and build artifacts
+node_modules/
+dist/
+cache/
+artifacts/
+typechain-types/
+
+# Integration tests excluded from type-aware lint (pending future integration test harness rework)
+test/old/integration.test.ts
+test/old/SimpleJitExecutor.test.ts

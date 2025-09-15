@@ -28,7 +28,16 @@
     "./src/**/*",
     "./test/**/*"
   ],
-  "exclude": ["node_modules", "dist", "cache", "artifacts", "typechain-types", "test/old"],
+  "exclude": [
+    "node_modules", 
+    "dist", 
+    "cache", 
+    "artifacts", 
+    "typechain-types", 
+    "test/old",
+    "test/old/integration.test.ts",
+    "test/old/SimpleJitExecutor.test.ts"
+  ],
   "ts-node": {
     "esm": false,
     "compilerOptions": {
