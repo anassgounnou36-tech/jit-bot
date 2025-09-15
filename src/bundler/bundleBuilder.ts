@@ -6,11 +6,14 @@ import { getLogger } from '../logging/logger';
 export interface FlashbotsBundle {
   transactions: string[];
   blockNumber: number;
+  targetBlockNumber?: number;
+  maxBlockNumber?: number;
   minTimestamp?: number;
   maxTimestamp?: number;
   // Enhanced bundle with victim transaction support
   victimTransaction?: {
     rawTxHex: string;
+    rawTx?: string; // Alias for compatibility with tests and docs
     hash: string;
     insertAfterIndex: number; // Position to insert victim tx in bundle
   };
@@ -273,10 +276,13 @@ export class BundleBuilder {
       const bundle: FlashbotsBundle = {
         transactions: [signedMintTx, signedBurnTx], // Victim tx inserted between these
         blockNumber: enhancedBundle.targetBlockNumber,
+        targetBlockNumber: enhancedBundle.targetBlockNumber,
+        maxBlockNumber: enhancedBundle.targetBlockNumber + 3,
         minTimestamp: Math.floor(Date.now() / 1000),
         maxTimestamp: Math.floor(Date.now() / 1000) + 60, // 1 minute max
         victimTransaction: {
           rawTxHex: enhancedBundle.victimTransaction.rawTxHex,
+          rawTx: enhancedBundle.victimTransaction.rawTxHex, // Alias for compatibility
           hash: enhancedBundle.victimTransaction.hash,
           insertAfterIndex: 0 // Insert after mint transaction
         }
@@ -327,6 +333,8 @@ export class BundleBuilder {
       const bundle: FlashbotsBundle = {
         transactions: [signedJitTx],
         blockNumber: targetBlock,
+        targetBlockNumber: targetBlock,
+        maxBlockNumber: targetBlock + 3,
         minTimestamp: Math.floor(Date.now() / 1000),
         maxTimestamp: Math.floor(Date.now() / 1000) + 60 // 1 minute max
       };
@@ -479,6 +487,8 @@ export class BundleBuilder {
       return {
         transactions: [signedCancelTx],
         blockNumber: originalBundle.blockNumber,
+        targetBlockNumber: originalBundle.targetBlockNumber,
+        maxBlockNumber: originalBundle.maxBlockNumber,
         minTimestamp: originalBundle.minTimestamp,
         maxTimestamp: originalBundle.maxTimestamp
       };
@@ -488,4 +498,58 @@ export class BundleBuilder {
       return null;
     }
   }
+}
+
+/**
+ * Validate bundle ordering and victim transaction requirements
+ * Tolerates either rawTx or rawTxHex being present
+ */
+export function validateBundleOrdering(bundle: {
+  transactions?: string[];
+  blockNumber?: number;
+  targetBlockNumber?: number;
+  victimTransaction?: {
+    rawTxHex?: string;
+    rawTx?: string;
+    hash?: string;
+    insertAfterIndex?: number;
+  };
+}): { valid: boolean; issues: string[] } {
+  const issues: string[] = [];
+
+  // Validate basic bundle structure
+  if (!bundle.transactions || bundle.transactions.length === 0) {
+    issues.push('Bundle must contain at least one transaction');
+  }
+
+  // Validate target block number
+  const targetBlock = bundle.targetBlockNumber ?? bundle.blockNumber;
+  if (!targetBlock || targetBlock <= 0) {
+    issues.push('Target block number must be greater than 0');
+  }
+
+  // Validate victim transaction if present
+  if (bundle.victimTransaction) {
+    const { victimTransaction } = bundle;
+    
+    // Require either rawTx or rawTxHex
+    if (!victimTransaction.rawTx && !victimTransaction.rawTxHex) {
+      issues.push('Victim transaction must have either rawTx or rawTxHex');
+    }
+    
+    // Require hash
+    if (!victimTransaction.hash) {
+      issues.push('Victim transaction must have hash');
+    }
+    
+    // Require valid insertAfterIndex
+    if (typeof victimTransaction.insertAfterIndex !== 'number' || victimTransaction.insertAfterIndex < 0) {
+      issues.push('Victim transaction insertAfterIndex must be a non-negative number');
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues
+  };
 }

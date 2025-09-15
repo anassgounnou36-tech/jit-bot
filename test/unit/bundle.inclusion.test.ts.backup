@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { ethers } from 'ethers';
-import { BundleBuilder, EnhancedJitBundle } from '../../src/bundler/bundleBuilder';
+import { BundleBuilder, EnhancedJitBundle, validateBundleOrdering } from '../../src/bundler/bundleBuilder';
 import { PendingSwapDetected } from '../../src/watcher/mempoolWatcher';
 import { JitParameters } from '../../src/watcher/simulator';
 
@@ -10,22 +10,31 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
   let mockWallet: any;
 
   beforeEach(() => {
-    // Create mock provider
+    // Create mock provider with more complete interface
     mockProvider = {
       getBlockNumber: async () => 18000000,
       getNetwork: async () => ({ chainId: 1 }),
       getBlock: async () => ({
         baseFeePerGas: ethers.utils.parseUnits('20', 'gwei')
-      })
+      }),
+      getGasPrice: async () => ethers.utils.parseUnits('20', 'gwei'),
+      // Required by ethers Wallet constructor
+      _isProvider: true,
+      formatter: {},
+      _events: {},
+      _eventsCount: 0,
+      _maxListeners: undefined,
+      anyNetwork: false
     };
 
     // Create mock wallet
     const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111';
-    mockWallet = new ethers.Wallet(privateKey);
     
+    // Create BundleBuilder - it will create its own wallet internally
     bundleBuilder = new BundleBuilder(privateKey, mockProvider as any);
-    (bundleBuilder as any).wallet = mockWallet;
-    (bundleBuilder as any).provider = mockProvider;
+    
+    // Get the created wallet to use in tests
+    mockWallet = (bundleBuilder as any).wallet;
   });
 
   describe('Enhanced JIT Bundle Creation', () => {
@@ -42,7 +51,7 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
         from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
         to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
         rawTxHex: '0x02f8b10182033f8459682f008459682f0f8302bf2094e592427a0aece92de3edee1f18e0157c05861564872386f26fc10000b844414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb8c001a0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0a0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0',
-        calldata: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb8',
+        calldata: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb80',
         gasLimitEstimate: '200000',
         timestamp: Math.floor(Date.now() / 1000)
       };
@@ -160,6 +169,11 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
       // Validate signed transactions
       expect(flashbotsBundle.transactions[0]).to.equal('0xsigned_tx_42'); // mint transaction
       expect(flashbotsBundle.transactions[1]).to.equal('0xsigned_tx_43'); // burn transaction
+
+      // Validate new fields added for compatibility
+      expect(flashbotsBundle.targetBlockNumber).to.equal(18000001);
+      expect(flashbotsBundle.maxBlockNumber).to.equal(18000004); // targetBlock + 3
+      expect(flashbotsBundle.victimTransaction!.rawTx).to.equal('0x02f8b1...'); // Should be set for compatibility
     });
 
     it('should handle transaction signing errors gracefully', async () => {
@@ -342,6 +356,87 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
       expect(burnTx.data).to.include('0x'); // Should contain encoded function call
       expect(burnTx.maxFeePerGas).to.be.a('string');
       expect(burnTx.maxPriorityFeePerGas).to.be.a('string');
+    });
+  });
+
+  describe('Bundle Ordering Validation', () => {
+    it('should export and validate bundle ordering correctly', () => {
+      const validBundle = {
+        transactions: ['0xsigned_tx_1', '0xsigned_tx_2'],
+        blockNumber: 18000001,
+        targetBlockNumber: 18000001,
+        maxBlockNumber: 18000004,
+        victimTransaction: {
+          rawTxHex: '0x02f8b1...',
+          rawTx: '0x02f8b1...', // Should accept either field
+          hash: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          insertAfterIndex: 0
+        }
+      };
+
+      const result = validateBundleOrdering(validBundle);
+      expect(result.valid).to.be.true;
+      expect(result.issues).to.have.length(0);
+    });
+
+    it('should validate bundle with only rawTxHex (legacy)', () => {
+      const legacyBundle = {
+        transactions: ['0xsigned_tx_1'],
+        blockNumber: 18000001,
+        victimTransaction: {
+          rawTxHex: '0x02f8b1...', // Only rawTxHex, no rawTx
+          hash: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          insertAfterIndex: 0
+        }
+      };
+
+      const result = validateBundleOrdering(legacyBundle);
+      expect(result.valid).to.be.true;
+      expect(result.issues).to.have.length(0);
+    });
+
+    it('should validate bundle with only rawTx (docs format)', () => {
+      const docsBundle = {
+        transactions: ['0xsigned_tx_1'],
+        blockNumber: 18000001,
+        victimTransaction: {
+          rawTx: '0x02f8b1...', // Only rawTx, no rawTxHex
+          hash: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          insertAfterIndex: 0
+        }
+      };
+
+      const result = validateBundleOrdering(docsBundle);
+      expect(result.valid).to.be.true;
+      expect(result.issues).to.have.length(0);
+    });
+
+    it('should reject bundle with missing victim transaction raw data', () => {
+      const invalidBundle = {
+        transactions: ['0xsigned_tx_1'],
+        blockNumber: 18000001,
+        victimTransaction: {
+          // Missing both rawTx and rawTxHex
+          hash: '0x1234567890123456789012345678901234567890123456789012345678901234',
+          insertAfterIndex: 0
+        }
+      };
+
+      const result = validateBundleOrdering(invalidBundle);
+      expect(result.valid).to.be.false;
+      expect(result.issues).to.include('Victim transaction must have either rawTx or rawTxHex');
+    });
+
+    it('should use targetBlockNumber when available, fallback to blockNumber', () => {
+      const bundleWithTargetBlock = {
+        transactions: ['0xsigned_tx_1'],
+        blockNumber: 0, // Invalid blockNumber
+        targetBlockNumber: 18000001 // Valid targetBlockNumber
+      };
+
+      const result = validateBundleOrdering(bundleWithTargetBlock);
+      expect(result.valid).to.be.true;
+      expect(result.issues).to.have.length(0);
     });
   });
 });
