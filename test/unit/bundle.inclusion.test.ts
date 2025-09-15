@@ -10,20 +10,31 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
   let mockWallet: any;
 
   beforeEach(() => {
-    // Create mock provider
-    mockProvider = {
-      getBlockNumber: async () => 18000000,
-      getNetwork: async () => ({ chainId: 1 }),
-      getBlock: async () => ({
-        baseFeePerGas: ethers.utils.parseUnits('20', 'gwei')
-      })
-    };
+    // Create simple mock provider - just use existing JsonRpcProvider constructor with dummy URL
+    // The actual network calls are mocked at the unit test level anyway
+    mockProvider = new ethers.providers.JsonRpcProvider('http://localhost:8545');
+    
+    // Override methods with mocks
+    mockProvider.getBlockNumber = async () => 18000000;
+    mockProvider.getNetwork = async () => ({ chainId: 1, name: 'homestead' });
+    mockProvider.getBlock = async () => ({
+      baseFeePerGas: ethers.utils.parseUnits('20', 'gwei'),
+      number: 18000000,
+      timestamp: Math.floor(Date.now() / 1000),
+      gasLimit: ethers.BigNumber.from('30000000'),
+      gasUsed: ethers.BigNumber.from('15000000'),
+      hash: '0x' + '1'.repeat(64)
+    });
+    mockProvider.getGasPrice = async () => ethers.utils.parseUnits('20', 'gwei');
 
     // Create mock wallet
     const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111';
-    mockWallet = new ethers.Wallet(privateKey);
     
-    bundleBuilder = new BundleBuilder(privateKey, mockProvider as any);
+    // Create BundleBuilder with proper provider
+    bundleBuilder = new BundleBuilder(privateKey, mockProvider);
+    
+    // Create separate mock wallet for testing
+    mockWallet = new ethers.Wallet(privateKey);
     (bundleBuilder as any).wallet = mockWallet;
     (bundleBuilder as any).provider = mockProvider;
   });
@@ -42,7 +53,7 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
         from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
         to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
         rawTxHex: '0x02f8b10182033f8459682f008459682f0f8302bf2094e592427a0aece92de3edee1f18e0157c05861564872386f26fc10000b844414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb8c001a0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0a0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0',
-        calldata: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb8',
+        calldata: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb80', // Fixed: even-length hex
         gasLimitEstimate: '200000',
         timestamp: Math.floor(Date.now() / 1000)
       };
@@ -98,11 +109,11 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
 
       const competitiveGasPrice = await (bundleBuilder as any).getCompetitiveGasPrice();
 
-      expect(competitiveGasPrice.maxPriorityFeePerGas).to.equal(ethers.utils.parseUnits('3', 'gwei'));
+      expect(competitiveGasPrice.maxPriorityFeePerGas.toString()).to.equal(ethers.utils.parseUnits('3', 'gwei').toString());
       
       // maxFeePerGas should be 130% of base fee + priority fee
       const expectedMaxFee = mockBaseFee.mul(130).div(100).add(ethers.utils.parseUnits('3', 'gwei'));
-      expect(competitiveGasPrice.maxFeePerGas).to.equal(expectedMaxFee);
+      expect(competitiveGasPrice.maxFeePerGas.toString()).to.equal(expectedMaxFee.toString());
     });
 
     it('should handle gas price fallback when provider fails', async () => {
@@ -112,8 +123,8 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
 
       const fallbackGasPrice = await (bundleBuilder as any).getCompetitiveGasPrice();
 
-      expect(fallbackGasPrice.maxFeePerGas).to.equal(ethers.utils.parseUnits('50', 'gwei'));
-      expect(fallbackGasPrice.maxPriorityFeePerGas).to.equal(ethers.utils.parseUnits('3', 'gwei'));
+      expect(fallbackGasPrice.maxFeePerGas.toString()).to.equal(ethers.utils.parseUnits('50', 'gwei').toString());
+      expect(fallbackGasPrice.maxPriorityFeePerGas.toString()).to.equal(ethers.utils.parseUnits('3', 'gwei').toString());
     });
   });
 
@@ -209,7 +220,7 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
         from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
         to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
         value: '0',
-        data: '0x414bf389...',
+        data: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb80',
         gasPrice: ethers.utils.parseUnits('20', 'gwei').toString(),
         gasLimit: '200000',
         nonce: 42,
@@ -267,7 +278,7 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
         from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
         to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
         rawTxHex: '0x02f8b1...',
-        calldata: '0x414bf389...',
+        calldata: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb80',
         gasLimitEstimate: '200000',
         timestamp: Math.floor(Date.now() / 1000)
       };
@@ -312,7 +323,7 @@ describe('BundleBuilder - Enhanced with Victim Transaction Inclusion', () => {
         from: '0x742d35Cc6634C0532925a3b8D43a39ee6a0f4E2E',
         to: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
         rawTxHex: '0x02f8b1...',
-        calldata: '0x414bf389...',
+        calldata: '0x414bf389000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000bb80',
         gasLimitEstimate: '200000',
         timestamp: Math.floor(Date.now() / 1000)
       };
