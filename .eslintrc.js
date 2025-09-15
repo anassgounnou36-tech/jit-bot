@@ -19,6 +19,8 @@ module.exports = {
     '@typescript-eslint/explicit-module-boundary-types': 'off',
     '@typescript-eslint/no-explicit-any': 'warn',
     '@typescript-eslint/no-non-null-assertion': 'warn',
-    'no-unused-vars': 'off' // Turn off base rule as it can report incorrect errors
+    'no-unused-vars': 'off', // Turn off base rule as it can report incorrect errors
+    'no-shadow': 'error',
+    '@typescript-eslint/no-shadow': 'error'
   },
 };
