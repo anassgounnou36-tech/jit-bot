@@ -531,6 +531,27 @@ export class BundleBuilder {
 /**
  * Validate bundle ordering and transaction requirements (CONSOLIDATED - Single Source of Truth)
  * Exported for external use by other modules including exec/flashbots.ts
+ * 
+ * VALIDATION REQUIREMENTS:
+ * 
+ * 1. STANDARD BUNDLES (no victimTransaction):
+ *    - Must contain at least 1 transaction (>= 1)
+ *    - Support for single transaction bundles is REQUIRED
+ *    - Used by legacy buildJitBundle() and standard flashbot operations
+ * 
+ * 2. ENHANCED BUNDLES (with victimTransaction):
+ *    - Must contain exactly 2 JIT transactions (mint + burn/collect)
+ *    - Victim transaction inserted between them at insertAfterIndex = 0
+ *    - Victim raw transaction bytes (rawTx or rawTxHex) and hash required
+ *    - Used by buildEnhancedJitBundle() for MEV sandwich opportunities
+ * 
+ * 3. GENERAL REQUIREMENTS:
+ *    - Valid target block number (> 0)
+ *    - Reasonable gas limits (< 80% of block limit)
+ *    - Proper transaction structure and signatures
+ * 
+ * @param bundle The FlashbotsBundle to validate
+ * @returns Validation result with success flag and any issues found
  */
 export function validateBundleOrdering(bundle: FlashbotsBundle): {
   valid: boolean;
@@ -566,6 +587,8 @@ export function validateBundleOrdering(bundle: FlashbotsBundle): {
     }
   } else {
     // For standard bundles (no victim transaction), require at least 1 transaction
+    // CRITICAL: This allows single transaction bundles (>= 1) which is required for
+    // legacy JIT operations and standard flashbot bundle creation
     if (bundle.transactions.length < 1) {
       issues.push('Bundle must contain at least 1 transaction');
     }
