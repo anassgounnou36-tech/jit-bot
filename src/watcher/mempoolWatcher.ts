@@ -1,4 +1,3 @@
-import WebSocket from 'ws';
 import { ethers } from 'ethers';
 import { EventEmitter } from 'events';
 import config from '../../config.json';
@@ -43,7 +42,6 @@ export interface PendingSwap {
 }
 
 export class MempoolWatcher extends EventEmitter {
-  private ws: WebSocket | null = null;
   private provider: ethers.providers.WebSocketProvider;
   private fallbackProvider?: ethers.providers.JsonRpcProvider;
   private logger: any;
@@ -97,9 +95,6 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    if (this.ws) {
-      this.ws.close();
-    }
     await this.provider.destroy();
     this.logger.info('Mempool watcher stopped');
   }
@@ -402,7 +397,7 @@ export class MempoolWatcher extends EventEmitter {
         to: tx.to!,
         rawTxHex: rawTxHex,
         calldata: tx.data,
-        gasLimitEstimate: tx.gasLimit.toString(),
+        gasLimitEstimate: tx.gasLimit?.toString() ?? '0',
         timestamp: Math.floor(Date.now() / 1000)
       };
     } catch (error: any) {
@@ -458,7 +453,7 @@ export class MempoolWatcher extends EventEmitter {
         to: tx.to!,
         rawTxHex: rawTxHex,
         calldata: tx.data,
-        gasLimitEstimate: tx.gasLimit.toString(),
+        gasLimitEstimate: tx.gasLimit?.toString() ?? '0',
         timestamp: Math.floor(Date.now() / 1000)
       };
     } catch (error: any) {
@@ -640,7 +635,7 @@ export class MempoolWatcher extends EventEmitter {
       hash: swapData.id,
       from: swapData.from,
       to: swapData.to,
-      value: tx.value.toString(),
+      value: tx.value?.toString() ?? '0',
       data: swapData.calldata,
       gasPrice: tx.gasPrice?.toString() || '0',
       gasLimit: swapData.gasLimitEstimate,

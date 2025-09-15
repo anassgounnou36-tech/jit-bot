@@ -57,7 +57,7 @@ export class BundleBuilder {
     jitParams: JitParameters,
     contractAddress: string
   ): Promise<EnhancedJitBundle> {
-    const bundleId = `bundle_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+    const bundleId = `bundle_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     
     this.logger.info({
       msg: 'Building enhanced JIT bundle with victim transaction',
