@@ -4,6 +4,7 @@ import { getPoolState } from '../pool/stateFetcher';
 import { validateTickRange } from '../lp/tickUtils';
 import { getFlashloanOrchestrator } from '../exec/flashloan';
 import { getLogger } from '../logging/logger';
+import { validateBundleOrdering } from '../bundler/bundleBuilder';
 
 export interface ForkSimulationParams {
   poolAddress: string;
@@ -875,8 +876,8 @@ async function simulateBundleWithVictim(
       targetBlockNumber: params.blockNumber || await getLatestBlockNumber()
     });
 
-    // Validate bundle ordering
-    const validation = flashbotsManager.validateBundleOrdering(bundle);
+    // Validate bundle ordering using consolidated validation
+    const validation = validateBundleOrdering(bundle);
     if (!validation.valid) {
       logger.warn({
         msg: 'Bundle validation failed',
