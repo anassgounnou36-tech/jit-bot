@@ -3,16 +3,32 @@ import { PendingSwap, PendingSwapDetected } from '../watcher/mempoolWatcher';
 import { JitParameters } from '../watcher/simulator';
 import { getLogger } from '../logging/logger';
 
+// Minimal TransactionRequest shape used by exec/flashbots.ts
+export interface BundleRequestTx {
+  to?: string;
+  data?: ethers.utils.BytesLike;
+  value?: ethers.BigNumberish;
+  gasLimit?: ethers.BigNumberish;
+  maxFeePerGas?: ethers.BigNumberish;
+  maxPriorityFeePerGas?: ethers.BigNumberish;
+  gasPrice?: ethers.BigNumberish;
+  type?: number;
+  nonce?: number;
+}
+
 export interface FlashbotsBundle {
-  transactions: string[];
-  blockNumber: number;
+  transactions: Array<string | BundleRequestTx>;
+  blockNumber?: number; // Optional to match exec bundle creation pattern
+  targetBlockNumber?: number; // Compatibility with exec/flashbots.ts
+  maxBlockNumber?: number; // Compatibility with exec/flashbots.ts  
   minTimestamp?: number;
   maxTimestamp?: number;
   // Enhanced bundle with victim transaction support
   victimTransaction?: {
-    rawTxHex: string;
+    rawTx?: string; // Alias for compatibility
+    rawTxHex?: string; // Legacy field name
     hash: string;
-    insertAfterIndex: number; // Position to insert victim tx in bundle
+    insertAfterIndex?: number; // Position to insert victim tx in bundle (default: 0)
   };
 }
 
@@ -273,12 +289,14 @@ export class BundleBuilder {
       const bundle: FlashbotsBundle = {
         transactions: [signedMintTx, signedBurnTx], // Victim tx inserted between these
         blockNumber: enhancedBundle.targetBlockNumber,
+        targetBlockNumber: enhancedBundle.targetBlockNumber, // Compatibility with exec/flashbots.ts
         minTimestamp: Math.floor(Date.now() / 1000),
         maxTimestamp: Math.floor(Date.now() / 1000) + 60, // 1 minute max
         victimTransaction: {
-          rawTxHex: enhancedBundle.victimTransaction.rawTxHex,
+          rawTx: enhancedBundle.victimTransaction.rawTxHex, // Alias for compatibility
+          rawTxHex: enhancedBundle.victimTransaction.rawTxHex, // Legacy field
           hash: enhancedBundle.victimTransaction.hash,
-          insertAfterIndex: 0 // Insert after mint transaction
+          insertAfterIndex: 0 // Insert after mint transaction (default value)
         }
       };
 
@@ -286,7 +304,7 @@ export class BundleBuilder {
         msg: 'Bundle converted to Flashbots format',
         bundleId: enhancedBundle.bundleId,
         totalTransactions: 3, // mint + victim + burn
-        targetBlock: bundle.blockNumber
+        targetBlock: bundle.blockNumber || bundle.targetBlockNumber
       });
 
       return bundle;
@@ -327,6 +345,7 @@ export class BundleBuilder {
       const bundle: FlashbotsBundle = {
         transactions: [signedJitTx],
         blockNumber: targetBlock,
+        targetBlockNumber: targetBlock, // Compatibility with exec/flashbots.ts
         minTimestamp: Math.floor(Date.now() / 1000),
         maxTimestamp: Math.floor(Date.now() / 1000) + 60 // 1 minute max
       };
@@ -390,9 +409,15 @@ export class BundleBuilder {
 
     for (const txData of bundle.transactions) {
       try {
-        // Parse the signed transaction to estimate gas
-        const tx = ethers.utils.parseTransaction(txData);
-        totalGas = totalGas.add(tx.gasLimit || 21000);
+        if (typeof txData === 'string') {
+          // Parse the signed transaction to estimate gas
+          const tx = ethers.utils.parseTransaction(txData);
+          totalGas = totalGas.add(tx.gasLimit || 21000);
+        } else {
+          // Handle TransactionRequest object
+          const gasLimit = txData.gasLimit ? ethers.BigNumber.from(txData.gasLimit) : ethers.BigNumber.from(21000);
+          totalGas = totalGas.add(gasLimit);
+        }
       } catch (error) {
         // Fallback gas estimate
         totalGas = totalGas.add(500000);
@@ -430,16 +455,26 @@ export class BundleBuilder {
       return false;
     }
 
-    if (bundle.blockNumber <= 0) {
+    // Accept either blockNumber or targetBlockNumber
+    const effectiveBlockNumber = bundle.blockNumber || bundle.targetBlockNumber;
+    if (!effectiveBlockNumber || effectiveBlockNumber <= 0) {
       return false;
     }
 
-    // Validate transaction signatures
+    // Validate transaction signatures and structure
     for (const txData of bundle.transactions) {
       try {
-        const tx = ethers.utils.parseTransaction(txData);
-        if (!tx.from) {
-          return false;
+        if (typeof txData === 'string') {
+          // Validate signed transaction hex
+          const tx = ethers.utils.parseTransaction(txData);
+          if (!tx.from) {
+            return false;
+          }
+        } else {
+          // Validate TransactionRequest object has required fields
+          if (!txData.to || txData.to === '') {
+            return false;
+          }
         }
       } catch (error) {
         return false;
@@ -476,9 +511,12 @@ export class BundleBuilder {
         type: 2
       });
 
+      const effectiveBlockNumber = originalBundle.blockNumber || originalBundle.targetBlockNumber;
+
       return {
         transactions: [signedCancelTx],
-        blockNumber: originalBundle.blockNumber,
+        blockNumber: effectiveBlockNumber,
+        targetBlockNumber: effectiveBlockNumber, // Compatibility
         minTimestamp: originalBundle.minTimestamp,
         maxTimestamp: originalBundle.maxTimestamp
       };
@@ -488,4 +526,70 @@ export class BundleBuilder {
       return null;
     }
   }
+}
+
+/**
+ * Validate bundle ordering and transaction requirements (from PR #30)
+ * Exported for external use by other modules
+ */
+export function validateBundleOrdering(bundle: FlashbotsBundle): {
+  valid: boolean;
+  issues: string[];
+} {
+  const issues: string[] = [];
+
+  // Check minimum transaction count
+  if (bundle.transactions.length < 1) {
+    issues.push('Bundle must contain at least 1 transaction');
+  }
+
+  // Check victim transaction inclusion for enhanced bundles
+  if (bundle.victimTransaction) {
+    const insertIndex = bundle.victimTransaction.insertAfterIndex || 0;
+    
+    if (insertIndex < 0 || insertIndex >= bundle.transactions.length) {
+      issues.push('Victim transaction insert index out of bounds');
+    }
+    
+    const rawTx = bundle.victimTransaction.rawTx || bundle.victimTransaction.rawTxHex;
+    if (!rawTx) {
+      issues.push('Victim transaction raw bytes required');
+    }
+    
+    if (!bundle.victimTransaction.hash) {
+      issues.push('Victim transaction hash required');
+    }
+  }
+
+  // Check target block validity
+  const effectiveBlockNumber = bundle.blockNumber || bundle.targetBlockNumber;
+  if (!effectiveBlockNumber || effectiveBlockNumber <= 0) {
+    issues.push('Invalid target block number');
+  }
+
+  // Check transaction gas limits
+  let totalGasLimit = 0;
+  for (const tx of bundle.transactions) {
+    if (typeof tx === 'string') {
+      try {
+        const parsedTx = ethers.utils.parseTransaction(tx);
+        totalGasLimit += Number(parsedTx.gasLimit || 21000);
+      } catch {
+        totalGasLimit += 500000; // Fallback estimate
+      }
+    } else {
+      const gasLimit = tx.gasLimit ? Number(tx.gasLimit) : 21000;
+      totalGasLimit += gasLimit;
+    }
+  }
+  
+  const MAX_BLOCK_GAS_LIMIT = 30_000_000; // Ethereum block gas limit
+  if (totalGasLimit > MAX_BLOCK_GAS_LIMIT * 0.8) { // Use 80% of block limit as safety margin
+    issues.push('Bundle gas usage too high for single block');
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues
+  };
 }
