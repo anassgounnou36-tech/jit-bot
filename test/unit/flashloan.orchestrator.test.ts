@@ -132,6 +132,29 @@ describe('Flashloan Orchestrator', function () {
       expect(result.issues.some(issue => issue.includes('Provider selection failed'))).to.be.true;
     });
 
+    it('should enforce 300k USD cap with various token types', async function () {
+      // Test with USDC: 250k USDC should pass (under 300k cap)
+      const usdcToken = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+      const validUsdcAmount = ethers.utils.parseUnits('250000', 6); // 250k USDC
+
+      const validResult = await orchestrator.validateFlashloanParams(usdcToken, validUsdcAmount, mockProvider);
+      expect(validResult.valid).to.be.true;
+
+      // Test with WETH: 149 ETH should pass (~$298k at $2000/ETH, under 300k cap)
+      const wethToken = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
+      const validWethAmount = ethers.utils.parseEther('149'); // 149 ETH
+
+      const validWethResult = await orchestrator.validateFlashloanParams(wethToken, validWethAmount, mockProvider);
+      expect(validWethResult.valid).to.be.true;
+
+      // Test cap enforcement: 151 ETH should fail (~$302k at $2000/ETH, over 300k cap)
+      const invalidWethAmount = ethers.utils.parseEther('151'); // 151 ETH
+
+      const invalidResult = await orchestrator.validateFlashloanParams(wethToken, invalidWethAmount, mockProvider);
+      expect(invalidResult.valid).to.be.false;
+      expect(invalidResult.issues.some(issue => issue.includes('exceeds maximum allowed'))).to.be.true;
+    });
+
     it('should prefer lower fees when both providers have liquidity', async function () {
       // Test with amount that both providers can handle (within Balancer range)
       const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // USDC
