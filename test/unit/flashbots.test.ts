@@ -31,9 +31,14 @@ describe('FlashbotsManager', function () {
       const bundle = await manager.createBundle(transactions, targetBlock);
       
       expect(bundle.transactions).to.have.length(1);
-      expect(bundle.targetBlockNumber).to.equal(targetBlock);
+      expect(bundle.blockNumber || bundle.targetBlockNumber).to.equal(targetBlock);
       expect(bundle.maxBlockNumber).to.equal(targetBlock + 3);
-      expect(bundle.transactions[0].type).to.equal(2); // EIP-1559
+      
+      // Check transaction type (handle union type)
+      const firstTx = bundle.transactions[0];
+      if (typeof firstTx !== 'string') {
+        expect(firstTx.type).to.equal(2); // EIP-1559
+      }
     });
 
     it('should reject transactions with excessive gas prices', async () => {

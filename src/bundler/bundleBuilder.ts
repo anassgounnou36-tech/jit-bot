@@ -13,11 +13,11 @@ export interface BundleRequestTx {
   maxPriorityFeePerGas?: ethers.BigNumberish;
   gasPrice?: ethers.BigNumberish;
   type?: number;
-  nonce?: number;
+  nonce?: ethers.BigNumberish;
 }
 
 export interface FlashbotsBundle {
-  transactions: Array<string | BundleRequestTx>;
+  transactions: Array<string | BundleRequestTx | ethers.providers.TransactionRequest>;
   blockNumber?: number; // Optional to match exec bundle creation pattern
   targetBlockNumber?: number; // Compatibility with exec/flashbots.ts
   maxBlockNumber?: number; // Compatibility with exec/flashbots.ts  
