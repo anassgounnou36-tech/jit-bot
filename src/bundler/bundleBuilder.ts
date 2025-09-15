@@ -538,11 +538,6 @@ export function validateBundleOrdering(bundle: FlashbotsBundle): {
 } {
   const issues: string[] = [];
 
-  // Check minimum transaction count - require at least 2 transactions for standard bundles (mint + burn/collect)
-  if (bundle.transactions.length < 2) {
-    issues.push('Bundle must contain at least 2 transactions (mint + burn/collect)');
-  }
-
   // Enhanced bundle validation for victim transaction inclusion
   if (bundle.victimTransaction) {
     // For enhanced bundles, require exactly 2 JIT transactions (mint + burn/collect)
@@ -568,6 +563,11 @@ export function validateBundleOrdering(bundle: FlashbotsBundle): {
     
     if (!bundle.victimTransaction.hash) {
       issues.push('Victim transaction hash required');
+    }
+  } else {
+    // For standard bundles (no victim transaction), require at least 1 transaction
+    if (bundle.transactions.length < 1) {
+      issues.push('Bundle must contain at least 1 transaction');
     }
   }
 
