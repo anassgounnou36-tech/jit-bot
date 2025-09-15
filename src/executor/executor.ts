@@ -32,11 +32,11 @@ export class Executor {
   }
 
   async executeBundle(bundle: FlashbotsBundle): Promise<ExecutionResult> {
-    // Derive resolved target block from either blockNumber or targetBlockNumber
+    // Compute resolved target block from either blockNumber or targetBlockNumber once at the start
     const resolvedTargetBlock = bundle.blockNumber ?? bundle.targetBlockNumber;
     
-    // Early error if neither is provided
-    if (!resolvedTargetBlock) {
+    // Early error if neither is provided or if it's invalid
+    if (!resolvedTargetBlock || resolvedTargetBlock <= 0) {
       return {
         success: false,
         error: 'Bundle must have either blockNumber or targetBlockNumber'
