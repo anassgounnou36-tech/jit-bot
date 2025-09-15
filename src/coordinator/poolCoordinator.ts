@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { ethers } from 'ethers';
-import { MempoolWatcher, PendingSwap } from '../watcher/mempoolWatcher';
+import { MempoolWatcher, PendingSwap, PendingSwapDetected } from '../watcher/mempoolWatcher';
 import { Simulator, JitParameters } from '../watcher/simulator';
 import { BundleBuilder } from '../bundler/bundleBuilder';
 import { Executor } from '../executor/executor';
@@ -180,7 +180,15 @@ export class PoolCoordinator extends EventEmitter {
       const rpcUrl = process.env.ETHEREUM_RPC_URL || config.rpc.ethereum;
       const watcher = new MempoolWatcher(rpcUrl);
       
-      // Listen for swap detections from this pool
+      // Listen for enhanced swap detections for logging
+      watcher.on('PendingSwapDetected', (enhanced: PendingSwapDetected) => {
+        // Check if this swap is for the current pool
+        if (enhanced.poolId === pool.id) {
+          this.logSwapDetected(enhanced, pool);
+        }
+      });
+
+      // Listen for swap detections from this pool (legacy pipeline)
       watcher.on('swapDetected', (swap: PendingSwap) => {
         this.handleSwapDetected(swap, pool.id);
       });
@@ -204,6 +212,30 @@ export class PoolCoordinator extends EventEmitter {
     
     this.provider.on('block', this.blockSubscription);
     console.log('🔄 Subscribed to new blocks for opportunity evaluation');
+  }
+
+  private logSwapDetected(enhanced: PendingSwapDetected, pool: PoolConfig): void {
+    try {
+      const tokenSymbol = this.symbolForToken(pool, enhanced.tokenIn);
+      const decimals = this.decimalsForToken(pool, enhanced.tokenIn);
+      
+      // Format amount with correct decimals
+      const amountFormatted = ethers.utils.formatUnits(enhanced.amountIn, decimals);
+      
+      // Check if this is an ETH/USDC pool
+      const isEthUsdc = this.isEthUsdcPool(pool);
+      
+      if (isEthUsdc) {
+        // For ETH/USDC pools, only log token amount (no USD)
+        console.log(`🔄 Swap detected in ${pool.id}: ${amountFormatted} ${tokenSymbol}`);
+      } else {
+        // For other pools, include USD value
+        const usdValue = ethers.utils.formatUnits(enhanced.amountUSD, 18); // amountUSD is in 18 decimals
+        console.log(`🔄 Swap detected in ${pool.id}: ${amountFormatted} ${tokenSymbol} ($${parseFloat(usdValue).toFixed(2)})`);
+      }
+    } catch (error: any) {
+      console.warn(`❌ Error logging swap for pool ${pool.id}:`, error.message);
+    }
   }
 
   private async handleSwapDetected(swap: PendingSwap, poolId: string): Promise<void> {
@@ -447,6 +479,39 @@ export class PoolCoordinator extends EventEmitter {
     const ethPriceUSD = 3000; // Approximate ETH price
     const profitETHFloat = parseFloat(ethers.utils.formatEther(profitETH));
     return profitETHFloat * ethPriceUSD;
+  }
+
+  // Helper functions for swap logging
+  private isEthUsdcPool(pool: PoolConfig): boolean {
+    const token0Lower = pool.symbol0.toLowerCase();
+    const token1Lower = pool.symbol1.toLowerCase();
+    
+    return (
+      (token0Lower === 'weth' || token0Lower === 'eth') && token1Lower === 'usdc'
+    ) || (
+      (token1Lower === 'weth' || token1Lower === 'eth') && token0Lower === 'usdc'
+    );
+  }
+
+  private symbolForToken(pool: PoolConfig, tokenAddr: string): string {
+    const tokenAddrLower = tokenAddr.toLowerCase();
+    if (tokenAddrLower === pool.token0.toLowerCase()) {
+      return pool.symbol0;
+    } else if (tokenAddrLower === pool.token1.toLowerCase()) {
+      return pool.symbol1;
+    }
+    return 'UNKNOWN';
+  }
+
+  private decimalsForToken(pool: PoolConfig, tokenAddr: string): number {
+    const symbol = this.symbolForToken(pool, tokenAddr);
+    const symbolLower = symbol.toLowerCase();
+    
+    // USDC and USDT use 6 decimals, others default to 18
+    if (symbolLower === 'usdc' || symbolLower === 'usdt') {
+      return 6;
+    }
+    return 18;
   }
 
   private recordOpportunityMetrics(opportunities: OpportunityCandidate[], executed: OpportunityCandidate): void {

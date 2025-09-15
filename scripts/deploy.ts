@@ -1,5 +1,4 @@
 import { ethers } from "hardhat";
-// import { SimpleJitExecutor } from "../typechain-types";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -15,8 +14,8 @@ async function main() {
   console.log("🌐 Network:", networkName);
   console.log("💰 Account balance:", ethers.utils.formatEther(await deployer.getBalance()), "ETH");
 
-  // Deploy SimpleJitExecutor
-  const SimpleJitExecutor = await ethers.getContractFactory("SimpleJitExecutor");
+  // Deploy JitExecutor
+  const JitExecutor = await ethers.getContractFactory("JitExecutor");
   
   // Get configuration from environment or use defaults
   const minProfitThreshold = process.env.MIN_PROFIT_THRESHOLD 
@@ -25,31 +24,41 @@ async function main() {
   const maxLoanSize = process.env.MAX_LOAN_SIZE 
     ? ethers.utils.parseEther(process.env.MAX_LOAN_SIZE)
     : ethers.utils.parseEther("1000"); // 1000 ETH
-  
+  const profitRecipient = process.env.PROFIT_RECIPIENT || deployer.address;
+  const positionManager = process.env.POSITION_MANAGER || "0xC36442b4a4522E871399CD717aBDD847Ab11FE88";
+
   console.log("⚙️ Constructor parameters:");
   console.log("   Min profit threshold:", ethers.utils.formatEther(minProfitThreshold), "ETH");
   console.log("   Max loan size:", ethers.utils.formatEther(maxLoanSize), "ETH");
+  console.log("   Profit recipient:", profitRecipient);
+  console.log("   Position manager:", positionManager);
 
-  const jitExecutor = await SimpleJitExecutor.deploy(
+  const jitExecutor = await JitExecutor.deploy(
     minProfitThreshold,
-    maxLoanSize
+    maxLoanSize,
+    profitRecipient,
+    positionManager
   );
 
   await jitExecutor.deployed();
 
-  console.log("✅ SimpleJitExecutor deployed to:", jitExecutor.address);
+  console.log("✅ JitExecutor deployed to:", jitExecutor.address);
   
   // Verify deployment
   console.log("🔍 Verifying deployment...");
   const owner = await jitExecutor.owner();
   const deployedMinProfit = await jitExecutor.minProfitThreshold();
   const deployedMaxLoan = await jitExecutor.maxLoanSize();
+  const deployedProfitRecipient = await jitExecutor.profitRecipient();
+  const deployedPositionManager = await jitExecutor.positionManager();
   const isPaused = await jitExecutor.paused();
 
   console.log("📊 Deployment verification:");
   console.log("   Owner:", owner);
   console.log("   Min profit threshold:", ethers.utils.formatEther(deployedMinProfit), "ETH");
   console.log("   Max loan size:", ethers.utils.formatEther(deployedMaxLoan), "ETH");
+  console.log("   Profit recipient:", deployedProfitRecipient);
+  console.log("   Position manager:", deployedPositionManager);
   console.log("   Paused:", isPaused);
 
   // Save deployment info
@@ -61,7 +70,9 @@ async function main() {
     timestamp: new Date().toISOString(),
     constructor: {
       minProfitThreshold: minProfitThreshold.toString(),
-      maxLoanSize: maxLoanSize.toString()
+      maxLoanSize: maxLoanSize.toString(),
+      profitRecipient: profitRecipient,
+      positionManager: positionManager
     },
     txHash: jitExecutor.deployTransaction.hash
   };
@@ -91,10 +102,14 @@ async function main() {
 
   // Instructions for next steps
   console.log("\n📋 Next steps:");
-  console.log("1. Set JIT_CONTRACT_ADDRESS in your .env file:");
-  console.log(`   JIT_CONTRACT_ADDRESS=${jitExecutor.address}`);
+  console.log("1. Set JIT_EXECUTOR_ADDRESS in your .env file:");
+  console.log(`   JIT_EXECUTOR_ADDRESS=${jitExecutor.address}`);
   console.log("2. Fund the contract with ETH for gas costs");
   console.log("3. Configure the bot with proper RPC endpoints");
+  
+  // Export line for easy copy-paste
+  console.log("\n🔧 Export line for .env:");
+  console.log(`JIT_EXECUTOR_ADDRESS=${jitExecutor.address}`);
   
   if (networkName === "fork") {
     console.log("4. Start the bot with: npm run dev");
