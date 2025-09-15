@@ -32,8 +32,18 @@ export class Executor {
   }
 
   async executeBundle(bundle: FlashbotsBundle): Promise<ExecutionResult> {
-    const effectiveBlockNumber = bundle.blockNumber || bundle.targetBlockNumber;
-    console.log(`🚀 Executing bundle for block ${effectiveBlockNumber}`);
+    // Derive resolved target block from either blockNumber or targetBlockNumber
+    const resolvedTargetBlock = bundle.blockNumber ?? bundle.targetBlockNumber;
+    
+    // Early error if neither is provided
+    if (!resolvedTargetBlock) {
+      return {
+        success: false,
+        error: 'Bundle must have either blockNumber or targetBlockNumber'
+      };
+    }
+
+    console.log(`🚀 Executing bundle for block ${resolvedTargetBlock}`);
 
     if (!this.flashbotsProvider) {
       return {
@@ -63,16 +73,8 @@ export class Executor {
         };
       }
 
-      // Monitor for inclusion
-      const effectiveBlockNumber = bundle.blockNumber || bundle.targetBlockNumber;
-      if (!effectiveBlockNumber) {
-        return {
-          success: false,
-          error: 'Bundle must have either blockNumber or targetBlockNumber'
-        };
-      }
-      
-      const result = await this.monitorBundleInclusion(bundleHash, effectiveBlockNumber);
+      // Monitor for inclusion using the resolved target block
+      const result = await this.monitorBundleInclusion(bundleHash, resolvedTargetBlock);
       
       console.log(`📊 Bundle execution result: ${result.success ? 'Success' : 'Failed'}`);
       return result;
