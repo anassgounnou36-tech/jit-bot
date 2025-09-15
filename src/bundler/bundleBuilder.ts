@@ -529,8 +529,8 @@ export class BundleBuilder {
 }
 
 /**
- * Validate bundle ordering and transaction requirements (from PR #30)
- * Exported for external use by other modules
+ * Validate bundle ordering and transaction requirements (CONSOLIDATED - Single Source of Truth)
+ * Exported for external use by other modules including exec/flashbots.ts
  */
 export function validateBundleOrdering(bundle: FlashbotsBundle): {
   valid: boolean;
@@ -538,22 +538,32 @@ export function validateBundleOrdering(bundle: FlashbotsBundle): {
 } {
   const issues: string[] = [];
 
-  // Check minimum transaction count
-  if (bundle.transactions.length < 1) {
-    issues.push('Bundle must contain at least 1 transaction');
+  // Check minimum transaction count - require at least 2 transactions for standard bundles (mint + burn/collect)
+  if (bundle.transactions.length < 2) {
+    issues.push('Bundle must contain at least 2 transactions (mint + burn/collect)');
   }
 
-  // Check victim transaction inclusion for enhanced bundles
+  // Enhanced bundle validation for victim transaction inclusion
   if (bundle.victimTransaction) {
-    const insertIndex = bundle.victimTransaction.insertAfterIndex || 0;
+    // For enhanced bundles, require exactly 2 JIT transactions (mint + burn/collect)
+    if (bundle.transactions.length !== 2) {
+      issues.push('Enhanced bundle requires exactly 2 JIT transactions (mint + burn/collect)');
+    }
+    
+    // Enforce victim placement between mint and burn: insertAfterIndex must be 0
+    const insertIndex = bundle.victimTransaction.insertAfterIndex ?? 0; // Default to 0 if undefined
+    if (insertIndex !== 0) {
+      issues.push('Victim transaction must be inserted after mint transaction (insertAfterIndex = 0)');
+    }
     
     if (insertIndex < 0 || insertIndex >= bundle.transactions.length) {
       issues.push('Victim transaction insert index out of bounds');
     }
     
+    // Require victim raw bytes (rawTx or rawTxHex) and hash
     const rawTx = bundle.victimTransaction.rawTx || bundle.victimTransaction.rawTxHex;
     if (!rawTx) {
-      issues.push('Victim transaction raw bytes required');
+      issues.push('Victim transaction raw bytes required (rawTx or rawTxHex)');
     }
     
     if (!bundle.victimTransaction.hash) {
