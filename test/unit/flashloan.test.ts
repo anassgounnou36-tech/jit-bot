@@ -82,7 +82,7 @@ describe('FlashloanOrchestrator', function () {
     it('should validate flashloan parameters', async () => {
       const orchestrator = getFlashloanOrchestrator();
       const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
-      const amount = ethers.utils.parseEther('10');
+      const amount = ethers.utils.parseUnits('250000', 6); // 250k USDC under 300k cap
 
       const validation = await orchestrator.validateFlashloanParams(token, amount);
       
@@ -94,8 +94,8 @@ describe('FlashloanOrchestrator', function () {
 
     it('should fail validation for excessive amount', async () => {
       const orchestrator = getFlashloanOrchestrator();
-      const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
-      const amount = ethers.utils.parseEther('10000'); // Very large amount
+      const token = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'; // WETH
+      const amount = ethers.utils.parseEther('200'); // 200 ETH (~$400k) exceeds 300k USD cap
 
       const validation = await orchestrator.validateFlashloanParams(token, amount);
       
@@ -106,7 +106,7 @@ describe('FlashloanOrchestrator', function () {
     it('should warn for very small amounts', async () => {
       const orchestrator = getFlashloanOrchestrator();
       const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
-      const amount = ethers.utils.parseEther('0.001'); // Very small amount
+      const amount = ethers.utils.parseUnits('1', 6); // 1 USDC - small amount
 
       const validation = await orchestrator.validateFlashloanParams(token, amount);
       
@@ -119,7 +119,7 @@ describe('FlashloanOrchestrator', function () {
     it('should build complete JIT flashloan transaction', async () => {
       const orchestrator = getFlashloanOrchestrator();
       const token = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
-      const amount = ethers.utils.parseEther('100');
+      const amount = ethers.utils.parseUnits('100000', 6); // 100k USDC under 300k cap
       const jitExecutor = '0x' + '2'.repeat(40);
       
       const swapParams = {

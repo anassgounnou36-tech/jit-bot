@@ -411,8 +411,8 @@ export class FlashloanOrchestrator {
       // Get USD equivalent of flashloan amount
       const usdValue = await this.estimateUSDValue(token, amount);
       
-      // Check against configuration limit (default 10M USD if not configured)
-      const maxFlashloanUSD = ethers.utils.parseEther(this.config.maxFlashloanAmountUSD?.toString() || '10000000');
+      // Check against configuration limit (default 300k USD if not configured)
+      const maxFlashloanUSD = ethers.utils.parseEther(this.config.maxFlashloanAmountUSD?.toString() || '300000');
       
       if (usdValue.gt(maxFlashloanUSD)) {
         const usdValueFormatted = ethers.utils.formatEther(usdValue);
@@ -461,15 +461,15 @@ export class FlashloanOrchestrator {
       const normalizedToken = tokenAddress.toLowerCase();
       
       if (normalizedToken === WETH.toLowerCase()) {
-        // For ETH: amount (in wei) * $2000 / 10^18 = USD value in wei (18 decimals)
-        return amount.mul(2000).div(ethers.utils.parseEther('1')).mul(ethers.utils.parseEther('1'));
+        // For ETH: amount (in wei) * $2000 = USD value in wei (18 decimals)
+        return amount.mul(2000);
       } else if (normalizedToken === USDC.toLowerCase() || normalizedToken === USDT.toLowerCase()) {
         // Stablecoins: For 6-decimal tokens like USDC, assume 1:1 USD
         // Convert 6 decimals to 18 decimals: amount * 10^12
         return amount.mul(ethers.BigNumber.from(10).pow(12));
       } else {
         // For unknown tokens, assume similar to ETH but more conservative
-        return amount.mul(1000).div(ethers.utils.parseEther('1')).mul(ethers.utils.parseEther('1'));
+        return amount.mul(1000);
       }
     } catch (error: any) {
       this.logger.debug({
@@ -511,8 +511,10 @@ export class FlashloanOrchestrator {
       }
 
       // Check for very small amounts that may not be profitable
-      const minAmount = ethers.utils.parseEther('0.01'); // 0.01 ETH minimum
-      if (amount.lt(minAmount)) {
+      // Convert to USD value to check minimum threshold regardless of token decimals
+      const usdValue = await this.estimateUSDValue(token, amount);
+      const minUsdValue = ethers.utils.parseEther('10'); // $10 USD minimum
+      if (usdValue.lt(minUsdValue)) {
         issues.push('very_small_amount');
         warnings.push('Amount too small - flashloan fees may exceed profits');
       }
