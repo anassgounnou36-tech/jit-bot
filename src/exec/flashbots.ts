@@ -2,20 +2,7 @@ import { ethers } from 'ethers';
 import { getConfig, validateNoLiveExecution } from '../config';
 import { getLogger } from '../logging/logger';
 import { initializeMetrics } from '../metrics/prom';
-
-export interface FlashbotsBundle {
-  transactions: ethers.providers.TransactionRequest[];
-  targetBlockNumber: number;
-  maxBlockNumber?: number;
-  minTimestamp?: number;
-  maxTimestamp?: number;
-  // Enhanced bundle with victim transaction support
-  victimTransaction?: {
-    rawTx: string;
-    hash: string;
-    insertAfterIndex: number; // Position to insert victim tx in bundle
-  };
-}
+import { FlashbotsBundle } from '../bundler/bundleBuilder';
 
 export interface FlashbotsBundleResult {
   bundleHash: string;
@@ -172,6 +159,7 @@ export class FlashbotsManager {
 
     const bundle: FlashbotsBundle = {
       transactions: txRequests,
+      blockNumber: targetBlockNumber,
       targetBlockNumber,
       maxBlockNumber: targetBlockNumber + 3, // Allow bundle to be included in next 3 blocks
     };
@@ -179,7 +167,7 @@ export class FlashbotsManager {
     logger.info({
       msg: 'Bundle created successfully',
       bundleSize: bundle.transactions.length,
-      targetBlock: bundle.targetBlockNumber,
+      targetBlock: bundle.blockNumber || bundle.targetBlockNumber,
       maxBlock: bundle.maxBlockNumber
     });
 
@@ -230,6 +218,7 @@ export class FlashbotsManager {
     // Bundle ordering: [JIT mint] → [victim swap] → [JIT burn/collect]
     const bundle: FlashbotsBundle = {
       transactions: jitTxRequests,
+      blockNumber: params.targetBlockNumber,
       targetBlockNumber: params.targetBlockNumber,
       maxBlockNumber: params.targetBlockNumber + 3,
       victimTransaction: {
@@ -244,7 +233,7 @@ export class FlashbotsManager {
       bundleSize: bundle.transactions.length,
       victimTxHash: params.victimTransaction.hash,
       victimInsertPosition: 1, // After mint, before burn
-      targetBlock: bundle.targetBlockNumber,
+      targetBlock: bundle.blockNumber || bundle.targetBlockNumber,
       maxBlock: bundle.maxBlockNumber
     });
 
@@ -273,7 +262,7 @@ export class FlashbotsManager {
     
     logger.info({
       msg: 'Simulating bundle with eth_callBundle',
-      targetBlock: bundle.targetBlockNumber,
+      targetBlock: bundle.blockNumber || bundle.targetBlockNumber,
       txCount: bundle.transactions.length,
       hasVictim: !!bundle.victimTransaction
     });
@@ -285,7 +274,7 @@ export class FlashbotsManager {
       // Use eth_callBundle for simulation (if provider supports it)
       const simulationResult = await this.performEthCallBundleSimulation(
         simulationTxs,
-        bundle.targetBlockNumber
+        bundle.blockNumber || bundle.targetBlockNumber || 0
       );
 
       const totalGasUsed = simulationResult.results.reduce(
@@ -341,28 +330,49 @@ export class FlashbotsManager {
 
     // Add first JIT transaction (mint)
     if (bundle.transactions[0]) {
-      simulationTxs.push({
-        to: bundle.transactions[0].to!,
-        data: bundle.transactions[0].data!.toString(),
-        value: bundle.transactions[0].value?.toString() || '0',
-        gasLimit: Number(bundle.transactions[0].gasLimit || 500000),
-        from: '0x1234567890123456789012345678901234567890' // Mock sender for simulation
-      });
+      const tx = bundle.transactions[0];
+      if (typeof tx === 'string') {
+        // Parse signed transaction
+        try {
+          const parsedTx = ethers.utils.parseTransaction(tx);
+          simulationTxs.push({
+            to: parsedTx.to || '',
+            data: parsedTx.data,
+            value: parsedTx.value.toString(),
+            gasLimit: Number(parsedTx.gasLimit || 500000),
+            from: parsedTx.from || '0x1234567890123456789012345678901234567890'
+          });
+        } catch (error) {
+          // Skip invalid transaction
+        }
+      } else {
+        // Transaction request object
+        simulationTxs.push({
+          to: tx.to || '',
+          data: tx.data?.toString() || '0x',
+          value: tx.value?.toString() || '0',
+          gasLimit: Number(tx.gasLimit || 500000),
+          from: '0x1234567890123456789012345678901234567890' // Mock sender for simulation
+        });
+      }
     }
 
     // Insert victim transaction if present
     if (bundle.victimTransaction) {
       try {
         // Parse the raw victim transaction to extract fields
-        const parsedVictimTx = ethers.utils.parseTransaction(bundle.victimTransaction.rawTx);
-        
-        simulationTxs.push({
-          to: parsedVictimTx.to || '',
-          data: parsedVictimTx.data,
-          value: parsedVictimTx.value.toString(),
-          gasLimit: Number(parsedVictimTx.gasLimit),
-          from: parsedVictimTx.from || '0x0000000000000000000000000000000000000000'
-        });
+        const rawTx = bundle.victimTransaction.rawTx || bundle.victimTransaction.rawTxHex;
+        if (rawTx) {
+          const parsedVictimTx = ethers.utils.parseTransaction(rawTx);
+          
+          simulationTxs.push({
+            to: parsedVictimTx.to || '',
+            data: parsedVictimTx.data,
+            value: parsedVictimTx.value.toString(),
+            gasLimit: Number(parsedVictimTx.gasLimit),
+            from: parsedVictimTx.from || '0x0000000000000000000000000000000000000000'
+          });
+        }
       } catch (error: any) {
         this.logger.warn({
           err: error,
@@ -376,13 +386,31 @@ export class FlashbotsManager {
 
     // Add second JIT transaction (burn/collect)
     if (bundle.transactions[1]) {
-      simulationTxs.push({
-        to: bundle.transactions[1].to!,
-        data: bundle.transactions[1].data!.toString(),
-        value: bundle.transactions[1].value?.toString() || '0',
-        gasLimit: Number(bundle.transactions[1].gasLimit || 400000),
-        from: '0x1234567890123456789012345678901234567890' // Mock sender for simulation
-      });
+      const tx = bundle.transactions[1];
+      if (typeof tx === 'string') {
+        // Parse signed transaction
+        try {
+          const parsedTx = ethers.utils.parseTransaction(tx);
+          simulationTxs.push({
+            to: parsedTx.to || '',
+            data: parsedTx.data,
+            value: parsedTx.value.toString(),
+            gasLimit: Number(parsedTx.gasLimit || 400000),
+            from: parsedTx.from || '0x1234567890123456789012345678901234567890'
+          });
+        } catch (error) {
+          // Skip invalid transaction
+        }
+      } else {
+        // Transaction request object
+        simulationTxs.push({
+          to: tx.to || '',
+          data: tx.data?.toString() || '0x',
+          value: tx.value?.toString() || '0',
+          gasLimit: Number(tx.gasLimit || 400000),
+          from: '0x1234567890123456789012345678901234567890' // Mock sender for simulation
+        });
+      }
     }
 
     return simulationTxs;
@@ -471,7 +499,7 @@ export class FlashbotsManager {
     
     logger.info({
       msg: 'Simulating Flashbots bundle',
-      targetBlock: bundle.targetBlockNumber,
+      targetBlock: bundle.blockNumber || bundle.targetBlockNumber,
       txCount: bundle.transactions.length
     });
 
@@ -489,9 +517,43 @@ export class FlashbotsManager {
           bundleHash: `0x${Math.random().toString(16).slice(2, 66)}`,
           simulation: {
             success: true,
-            gasUsed: bundle.transactions.reduce((sum, tx) => sum + Number(tx.gasLimit || 0), 0),
-            effectiveGasPrice: ethers.BigNumber.from(bundle.transactions[0]?.maxFeePerGas || ethers.utils.parseUnits('20', 'gwei')),
-            totalValue: bundle.transactions.reduce((sum, tx) => sum.add(tx.value || 0), ethers.BigNumber.from(0))
+            gasUsed: bundle.transactions.reduce((sum, tx) => {
+              if (typeof tx === 'string') {
+                try {
+                  const parsedTx = ethers.utils.parseTransaction(tx);
+                  return sum + Number(parsedTx.gasLimit || 0);
+                } catch {
+                  return sum + 500000; // Fallback
+                }
+              } else {
+                return sum + Number(tx.gasLimit || 0);
+              }
+            }, 0),
+            effectiveGasPrice: (() => {
+              const firstTx = bundle.transactions[0];
+              if (typeof firstTx === 'string') {
+                try {
+                  const parsedTx = ethers.utils.parseTransaction(firstTx);
+                  return ethers.BigNumber.from(parsedTx.maxFeePerGas || ethers.utils.parseUnits('20', 'gwei'));
+                } catch {
+                  return ethers.utils.parseUnits('20', 'gwei');
+                }
+              } else {
+                return ethers.BigNumber.from(firstTx?.maxFeePerGas || ethers.utils.parseUnits('20', 'gwei'));
+              }
+            })(),
+            totalValue: bundle.transactions.reduce((sum, tx) => {
+              if (typeof tx === 'string') {
+                try {
+                  const parsedTx = ethers.utils.parseTransaction(tx);
+                  return sum.add(parsedTx.value || 0);
+                } catch {
+                  return sum;
+                }
+              } else {
+                return sum.add(tx.value || 0);
+              }
+            }, ethers.BigNumber.from(0))
           },
           victimIncluded: !!bundle.victimTransaction
         };
@@ -542,7 +604,7 @@ export class FlashbotsManager {
 
     logger.info({
       msg: 'Submitting bundle to multiple relays',
-      targetBlock: bundle.targetBlockNumber,
+      targetBlock: bundle.blockNumber || bundle.targetBlockNumber,
       txCount: bundle.transactions.length,
       relayCount: this.multiRelayUrls.length,
       hasVictim: !!bundle.victimTransaction
@@ -601,19 +663,42 @@ export class FlashbotsManager {
       const primaryResult = successfulSubmissions[0];
       
       this.metrics.incrementFlashbotsSuccess('submit_multi_relay');
-      this.metrics.updateLastBundleBlock(bundle.targetBlockNumber);
+      this.metrics.updateLastBundleBlock(bundle.blockNumber || bundle.targetBlockNumber || 0);
 
       return {
         bundleHash: primaryResult.bundleHash,
         simulation: {
           success: true,
           gasUsed: ethCallSimulation.gasUsed,
-          effectiveGasPrice: ethers.BigNumber.from(bundle.transactions[0]?.maxFeePerGas || 0),
-          totalValue: bundle.transactions.reduce((sum, tx) => sum.add(tx.value || 0), ethers.BigNumber.from(0))
+          effectiveGasPrice: (() => {
+            const firstTx = bundle.transactions[0];
+            if (typeof firstTx === 'string') {
+              try {
+                const parsedTx = ethers.utils.parseTransaction(firstTx);
+                return ethers.BigNumber.from(parsedTx.maxFeePerGas || 0);
+              } catch {
+                return ethers.BigNumber.from(0);
+              }
+            } else {
+              return ethers.BigNumber.from(firstTx?.maxFeePerGas || 0);
+            }
+          })(),
+          totalValue: bundle.transactions.reduce((sum, tx) => {
+            if (typeof tx === 'string') {
+              try {
+                const parsedTx = ethers.utils.parseTransaction(tx);
+                return sum.add(parsedTx.value || 0);
+              } catch {
+                return sum;
+              }
+            } else {
+              return sum.add(tx.value || 0);
+            }
+          }, ethers.BigNumber.from(0))
         },
         submission: {
           success: true,
-          targetBlock: bundle.targetBlockNumber,
+          targetBlock: bundle.blockNumber || bundle.targetBlockNumber || 0,
           bundleHash: primaryResult.bundleHash
         },
         victimIncluded: !!bundle.victimTransaction
@@ -631,7 +716,7 @@ export class FlashbotsManager {
         bundleHash: '',
         submission: {
           success: false,
-          targetBlock: bundle.targetBlockNumber,
+          targetBlock: bundle.blockNumber || bundle.targetBlockNumber || 0,
           bundleHash: '',
           error: error.message
         }
@@ -661,7 +746,7 @@ export class FlashbotsManager {
           msg: 'Attempting relay submission',
           attempt,
           maxRetries,
-          targetBlock: bundle.targetBlockNumber
+          targetBlock: bundle.blockNumber || bundle.targetBlockNumber
         });
 
         // In production, this would use actual relay submission
@@ -765,13 +850,14 @@ export class FlashbotsManager {
 
     // Check victim transaction inclusion for enhanced bundles
     if (bundle.victimTransaction) {
-      const insertIndex = bundle.victimTransaction.insertAfterIndex;
+      const insertIndex = bundle.victimTransaction.insertAfterIndex || 0;
       
       if (insertIndex < 0 || insertIndex >= bundle.transactions.length) {
         issues.push('Victim transaction insert index out of bounds');
       }
       
-      if (!bundle.victimTransaction.rawTx) {
+      const rawTx = bundle.victimTransaction.rawTx || bundle.victimTransaction.rawTxHex;
+      if (!rawTx) {
         issues.push('Victim transaction raw bytes required');
       }
       
@@ -781,12 +867,24 @@ export class FlashbotsManager {
     }
 
     // Check target block validity
-    if (bundle.targetBlockNumber <= 0) {
+    const effectiveBlockNumber = bundle.blockNumber || bundle.targetBlockNumber;
+    if (!effectiveBlockNumber || effectiveBlockNumber <= 0) {
       issues.push('Invalid target block number');
     }
 
     // Check transaction gas limits
-    const totalGasLimit = bundle.transactions.reduce((sum, tx) => sum + Number(tx.gasLimit || 0), 0);
+    const totalGasLimit = bundle.transactions.reduce((sum, tx) => {
+      if (typeof tx === 'string') {
+        try {
+          const parsedTx = ethers.utils.parseTransaction(tx);
+          return sum + Number(parsedTx.gasLimit || 0);
+        } catch {
+          return sum + 500000; // Fallback estimate
+        }
+      } else {
+        return sum + Number(tx.gasLimit || 0);
+      }
+    }, 0);
     const MAX_BLOCK_GAS_LIMIT = 30_000_000; // Ethereum block gas limit
     
     if (totalGasLimit > MAX_BLOCK_GAS_LIMIT * 0.8) { // Use 80% of block limit as safety margin
