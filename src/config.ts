@@ -81,6 +81,7 @@ export interface JitBotConfig {
   // Additional configuration from JSON
   minProfitThreshold: number;
   maxLoanSize: number;
+  maxFlashloanAmountUSD: number;
   tickRangeWidth: number;
   gasPriceStrategy: string;
   slippageTolerance: number;
@@ -264,6 +265,7 @@ export function loadConfig(): JitBotConfig {
     // Additional configuration from JSON
     minProfitThreshold: jsonConfig.minProfitThreshold || 0.01,
     maxLoanSize: jsonConfig.maxLoanSize || 1000000,
+    maxFlashloanAmountUSD: parseFloat(process.env.MAX_FLASHLOAN_AMOUNT_USD || jsonConfig.maxFlashloanAmountUSD?.toString() || '300000'),
     tickRangeWidth: jsonConfig.tickRangeWidth || 60,
     gasPriceStrategy: jsonConfig.gasPriceStrategy || 'aggressive',
     slippageTolerance: jsonConfig.slippageTolerance || 0.005
