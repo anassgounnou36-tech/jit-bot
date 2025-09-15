@@ -212,7 +212,6 @@ async function simulateJitExecution(fixture: any): Promise<{
   errors: string[];
   warnings: string[];
 }> {
-  const errors: string[] = [];
   const warnings: string[] = [];
   
   try {
