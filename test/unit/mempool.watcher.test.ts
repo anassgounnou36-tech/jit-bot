@@ -29,9 +29,24 @@ describe('MempoolWatcher', () => {
       }
     };
 
-    // Create watcher with mock RPC URL
-    watcher = new MempoolWatcher('ws://localhost:8545', 'http://fallback.example.com');
+    // Create watcher with non-resolvable IP addresses to prevent real connections
+    watcher = new MempoolWatcher('ws://0.0.0.0:1', 'http://0.0.0.0:1');
+    
+    // Immediately override all providers to prevent any real network calls
     (watcher as any).provider = mockProvider;
+    (watcher as any).fallbackProvider = mockProvider;
+    
+    // Stub methods used by parseExactInputSingle to ensure deterministic test results
+    (watcher as any).findTargetPool = () => ({ pool: '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8' });
+    (watcher as any).estimateUSDValue = async (tokenAddress: string, amount: ethers.BigNumber) => {
+      // Return appropriate USD values matching the test expectations
+      if (tokenAddress.toLowerCase() === '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2') {
+        // For WETH, return $2000 as BigNumber
+        return ethers.BigNumber.from('2000');
+      }
+      // For stablecoins, return $1000 as ETH value (parsed)
+      return ethers.utils.parseEther('1000');
+    };
   });
 
   describe('Raw Transaction Capture', () => {
@@ -84,7 +99,7 @@ describe('MempoolWatcher', () => {
 
     it('should parse exactInputSingle transactions', async () => {
       const tx = createMockExactInputSingleTransaction();
-      const rawTxHex = '0x02f8...'; // Mock raw transaction hex
+      const rawTxHex = '0xdeadbeef'; // Mock raw transaction hex string
       
       const swapData = await (watcher as any).parseExactInputSingle(tx, rawTxHex);
       
