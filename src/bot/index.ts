@@ -92,7 +92,7 @@ export class JitBot {
       poolCount: this.config.poolIds.length,
       flashbotsEnabled: !this.config.dryRun,
       mempoolWatcherEnabled: true,
-      flashloanPriority: this.config.flashloanPriority,
+      flashloanProviderPriority: this.config.flashloanProviderPriority,
       minSwapEth: this.config.minSwapEth,
       globalMinProfitUsd: this.config.globalMinProfitUsd
     });
@@ -785,7 +785,7 @@ export class JitBot {
         liveRiskAcknowledged: this.config.liveRiskAcknowledged,
         mempoolWatcherEnabled: true,
         minSwapEth: this.config.minSwapEth,
-        flashloanPriority: this.config.flashloanPriority
+        flashloanProviderPriority: this.config.flashloanProviderPriority
       },
       metricsUrl: this.metrics.getMetricsUrl()
     };

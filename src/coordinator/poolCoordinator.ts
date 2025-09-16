@@ -199,7 +199,8 @@ export class PoolCoordinator extends EventEmitter {
     console.log('🔄 Subscribed to new blocks for opportunity evaluation');
   }
 
-  private logSwapDetected(enhanced: PendingSwapDetected, pool: PoolConfig): void {
+  // DEPRECATED: Pool-specific logging - use centralized mempool monitoring instead
+  /* private logSwapDetected(enhanced: PendingSwapDetected, pool: PoolConfig): void {
     try {
       const tokenSymbol = this.symbolForToken(pool, enhanced.tokenIn);
       const decimals = this.decimalsForToken(pool, enhanced.tokenIn);
@@ -221,9 +222,10 @@ export class PoolCoordinator extends EventEmitter {
     } catch (error: any) {
       console.warn(`❌ Error logging swap for pool ${pool.id}:`, error.message);
     }
-  }
+  } */
 
-  private async handleSwapDetected(swap: PendingSwap, poolId: string): Promise<void> {
+  // DEPRECATED: Pool-specific handling - use centralized mempool monitoring instead  
+  /* private async handleSwapDetected(swap: PendingSwap, poolId: string): Promise<void> {
     const pool = this.pools.get(poolId);
     if (!pool || !pool.enabled) {
       return;

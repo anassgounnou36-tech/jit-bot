@@ -97,7 +97,7 @@ export class BundleBuilder {
       // Step 2: Prepare victim transaction (raw signed tx bytes)
       const victimTransaction = {
         rawTxHex: pendingSwap.rawTxHex,
-        hash: pendingSwap.id
+        hash: pendingSwap.id || pendingSwap.txHash
       };
 
       // Step 3: Build JIT burn/collect/repay transaction

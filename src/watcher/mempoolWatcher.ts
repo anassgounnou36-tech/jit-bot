@@ -30,6 +30,7 @@ export interface PendingSwapDetected {
   calldata?: string;
   amountOutEstimated?: string;
   from?: string;
+  to?: string;
 }
 
 // Legacy interface for backward compatibility
@@ -170,7 +171,32 @@ export class MempoolWatcher extends EventEmitter {
         return;
       }
 
-      // Step 3: Attempt to get raw transaction hex
+      // Step 3: Check for victim replacement
+      const currentTx = await this.provider.getTransaction(txHash);
+      if (!currentTx || currentTx.hash !== txHash) {
+        if (this.metrics) {
+          this.metrics.incrementVictimReplacements();
+        }
+        this.logger.warn({
+          txHash,
+          msg: 'VictimReplaced',
+          reason: 'transaction_replaced_before_processing'
+        });
+        return;
+      }
+
+      // Step 4: Check if already included
+      if (currentTx.blockNumber) {
+        this.logger.debug({
+          txHash,
+          blockNumber: currentTx.blockNumber,
+          msg: 'CandidateRejected',
+          reason: 'already_included'
+        });
+        return;
+      }
+
+      // Step 5: Attempt to get raw transaction hex
       const rawTxHex = await this.getRawSignedTransaction(txHash);
       if (!rawTxHex && !this.config.allowReconstructRawTx) {
         if (this.metrics) {
@@ -188,13 +214,13 @@ export class MempoolWatcher extends EventEmitter {
         this.metrics.incrementMempoolTxsRawFetched('local-node');
       }
 
-      // Step 4: Parse transaction data
+      // Step 6: Parse transaction data
       const swapData = await this.parseSwapTransaction(tx, rawTxHex || '0x');
       if (!swapData) {
         return;
       }
 
-      // Step 5: Validate thresholds
+      // Step 7: Validate thresholds
       const amountEth = parseFloat(ethers.utils.formatEther(swapData.amountIn));
       const estimatedUsdValue = parseFloat(swapData.estimatedUsd);
 
@@ -216,7 +242,7 @@ export class MempoolWatcher extends EventEmitter {
         this.metrics.incrementMempoolSwapsMatched();
       }
 
-      // Step 6: Emit PendingSwapDetected
+      // Step 8: Emit PendingSwapDetected
       this.logger.info({
         msg: 'PendingSwapDetected',
         candidateId: swapData.candidateId,
