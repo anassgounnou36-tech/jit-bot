@@ -51,10 +51,11 @@ export class MempoolWatcher extends EventEmitter {
   private provider: ethers.providers.WebSocketProvider;
   private fallbackProvider?: ethers.providers.JsonRpcProvider;
   private logger: any;
+  private config: any;
+  private metrics: any;
   
   private readonly UNISWAP_V3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564';
   private readonly UNISWAP_V3_ROUTER_V2 = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45'; // SwapRouter02
-  private readonly MIN_SWAP_THRESHOLD = ethers.utils.parseEther('10'); // 10 ETH minimum
   
   // Uniswap V3 function signatures
   private readonly UNISWAP_V3_SIGNATURES = {
@@ -64,33 +65,67 @@ export class MempoolWatcher extends EventEmitter {
     swap: '0x128acb08' // swap(address,bool,int256,uint160,bytes)
   };
 
-  constructor(rpcUrl: string, fallbackApiUrl?: string) {
+  // Pool matching for target pools
+  private targetPools: Map<string, any> = new Map();
+
+  constructor(config: any, provider: ethers.providers.WebSocketProvider, fallbackProvider?: ethers.providers.JsonRpcProvider, metrics?: any) {
     super();
+    this.config = config;
     this.logger = getLogger().child({ component: 'mempool-watcher' });
-    this.provider = new ethers.providers.WebSocketProvider(rpcUrl);
+    this.provider = provider;
+    this.fallbackProvider = fallbackProvider;
+    this.metrics = metrics;
     
-    // Setup fallback provider if vendor API URL is configured
-    if (fallbackApiUrl) {
-      this.fallbackProvider = new ethers.providers.JsonRpcProvider(fallbackApiUrl);
-      this.logger.info({
-        msg: 'Fallback provider configured',
-        fallbackUrl: fallbackApiUrl.replace(/\/\/.*@/, '//***@') // Hide credentials
-      });
+    // Initialize target pools for matching
+    this.initializeTargetPools();
+    
+    this.logger.info({
+      msg: 'MempoolWatcher initialized',
+      targetPoolsCount: this.targetPools.size,
+      minSwapEth: config.minSwapEth,
+      minSwapUsd: config.minSwapUsd,
+      allowReconstruct: config.allowReconstructRawTx
+    });
+  }
+
+  private initializeTargetPools(): void {
+    for (const pool of this.config.pools) {
+      const key = `${pool.token0}-${pool.token1}-${pool.fee}`;
+      this.targetPools.set(key, pool);
+      
+      // Also add reverse direction
+      const reverseKey = `${pool.token1}-${pool.token0}-${pool.fee}`;
+      this.targetPools.set(reverseKey, { ...pool, direction: 'reverse' });
     }
+    
+    this.logger.debug({
+      msg: 'Target pools initialized',
+      pools: Array.from(this.targetPools.keys())
+    });
   }
 
   async start(): Promise<void> {
-    this.logger.info('Starting mempool watcher for raw signed tx capture');
+    this.logger.info('Starting mempool watcher - always on for real-time monitoring');
     
     try {
       // Subscribe to pending transactions
       await this.provider.send('eth_subscribe', ['newPendingTransactions']);
       
       this.provider.on('pending', (txHash: string) => {
-        this.processPendingTransactionEnhanced(txHash);
+        this.processPendingTransactionEnhanced(txHash).catch(error => {
+          this.logger.debug({
+            err: error,
+            txHash,
+            msg: 'Error processing pending transaction'
+          });
+        });
       });
 
-      this.logger.info('Mempool watcher started successfully with raw tx capture');
+      this.logger.info({
+        msg: 'Mempool watcher started successfully',
+        provider: 'ws-subscription',
+        features: ['raw-tx-capture', 'uniswap-decoding', 'pool-matching']
+      });
     } catch (error: any) {
       this.logger.error({
         err: error,
@@ -101,23 +136,98 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    if (this.ws) {
-      this.ws.close();
+    try {
+      if (this.provider) {
+        await this.provider.destroy();
+      }
+      if (this.ws) {
+        this.ws.close();
+      }
+      this.logger.info('Mempool watcher stopped');
+    } catch (error: any) {
+      this.logger.error({
+        err: error,
+        msg: 'Error stopping mempool watcher'
+      });
     }
-    await this.provider.destroy();
-    this.logger.info('Mempool watcher stopped');
   }
 
   /**
-   * Enhanced pending transaction processing with raw signed tx capture
+   * Enhanced pending transaction processing with real mempool integration
    */
   private async processPendingTransactionEnhanced(txHash: string): Promise<void> {
+    // Increment metrics for transactions seen
+    if (this.metrics) {
+      this.metrics.incrementMempoolTxsSeen('local-node');
+    }
+
     try {
       // Step 1: Try to get raw signed transaction bytes immediately
       const rawTxHex = await this.getRawSignedTransaction(txHash);
       
       // Step 2: Get transaction details
       const tx = await this.getTransactionWithFallback(txHash);
+      
+      if (!tx || !tx.to) {
+        return;
+      }
+
+      // Step 3: Check if transaction targets Uniswap V3 routers
+      if (!this.isUniswapV3Transaction(tx.to)) {
+        return;
+      }
+
+      // Step 4: Parse and decode Uniswap V3 swap transaction
+      const swapData = await this.parseUniswapV3Transaction(tx, rawTxHex);
+      
+      if (!swapData) {
+        return;
+      }
+
+      // Step 5: Check if swap meets our thresholds and criteria
+      if (!this.shouldProcessSwap(swapData)) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolSwapsRejected('below_threshold');
+        }
+        return;
+      }
+
+      // Step 6: Match to target pools
+      const matchedPool = this.matchToTargetPool(swapData);
+      if (!matchedPool) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolSwapsRejected('no_pool_match');
+        }
+        return;
+      }
+
+      // Record successful match
+      if (this.metrics) {
+        this.metrics.incrementMempoolSwapsMatched(matchedPool.address);
+      }
+
+      // Step 7: Emit structured PendingSwapDetected event
+      this.logger.info({
+        msg: 'PendingSwapDetected',
+        candidateId: swapData.candidateId,
+        poolAddress: swapData.poolAddress,
+        tokenIn: swapData.tokenIn,
+        tokenOut: swapData.tokenOut,
+        amountInHuman: swapData.amountInHuman,
+        estimatedUsd: swapData.estimatedUsd,
+        method: swapData.decodedCall.method
+      });
+
+      this.emit('PendingSwapDetected', swapData);
+
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash,
+        msg: 'Failed to process pending transaction'
+      });
+    }
+  }
       
       if (!tx || !tx.to) {
         return;
@@ -384,10 +494,75 @@ export class MempoolWatcher extends EventEmitter {
       const parsed = iface.parseTransaction({ data: tx.data });
       const params = parsed.args[0];
       
-      // Find the target pool
-      const targetPool = this.findTargetPool(params.tokenIn, params.tokenOut, params.fee);
-      if (!targetPool) {
-        return null;
+      // Record successful decode
+      if (this.metrics) {
+        this.metrics.incrementMempoolSwapsDecoded('exactInputSingle');
+      }
+
+      // Generate candidate ID
+      const candidateId = `${tx.hash}_${Math.floor(Date.now() / 1000)}`;
+      
+      // Estimate USD value
+      const amountIn = ethers.BigNumber.from(params.amountIn);
+      const estimatedUsd = await this.estimateUSDValueForDisplay(params.tokenIn, amountIn);
+      const amountInHuman = ethers.utils.formatEther(amountIn);
+      
+      // Determine direction (simplified - would need pool state for accuracy)
+      const direction = 'token0->token1'; // Placeholder
+      
+      // Find the pool address (simplified - would use pool factory in production)
+      const poolAddress = await this.getPoolAddress(params.tokenIn, params.tokenOut, params.fee);
+      
+      const swapData: PendingSwapDetected = {
+        candidateId,
+        txHash: tx.hash,
+        rawTxHex,
+        poolAddress,
+        tokenIn: params.tokenIn,
+        tokenOut: params.tokenOut,
+        amountIn: params.amountIn.toString(),
+        amountInHuman,
+        feeTier: params.fee,
+        direction,
+        estimatedUsd,
+        blockNumberSeen: tx.blockNumber || 0,
+        timestamp: Math.floor(Date.now() / 1000),
+        provider: 'local-node',
+        decodedCall: {
+          method: 'exactInputSingle',
+          params: {
+            tokenIn: params.tokenIn,
+            tokenOut: params.tokenOut,
+            fee: params.fee,
+            recipient: params.recipient,
+            deadline: params.deadline.toString(),
+            amountIn: params.amountIn.toString(),
+            amountOutMinimum: params.amountOutMinimum.toString(),
+            sqrtPriceLimitX96: params.sqrtPriceLimitX96.toString()
+          }
+        }
+      };
+
+      this.logger.debug({
+        msg: 'exactInputSingle parsed successfully',
+        candidateId,
+        tokenIn: params.tokenIn,
+        tokenOut: params.tokenOut,
+        amountInHuman,
+        estimatedUsd
+      });
+
+      return swapData;
+      
+    } catch (error: any) {
+      this.logger.debug({
+        msg: 'Failed to parse exactInputSingle',
+        txHash: tx.hash,
+        error: error.message
+      });
+      return null;
+    }
+  }
       }
 
       // Estimate USD value (simplified - would use price oracle in production)
@@ -611,28 +786,91 @@ export class MempoolWatcher extends EventEmitter {
    */
   private shouldProcessSwap(swap: PendingSwapDetected): boolean {
     try {
-      // Check minimum swap size
-      const amountIn = ethers.BigNumber.from(swap.amountIn);
-      if (amountIn.lt(this.MIN_SWAP_THRESHOLD)) {
+      const amountInEth = parseFloat(swap.amountInHuman);
+      const amountInUsd = parseFloat(swap.estimatedUsd);
+
+      // Check ETH threshold
+      if (amountInEth < this.config.minSwapEth) {
+        this.logger.debug({
+          msg: 'Swap below ETH threshold',
+          candidateId: swap.candidateId,
+          amountInEth,
+          minSwapEth: this.config.minSwapEth
+        });
         return false;
       }
 
-      // Check minimum USD value
-      const amountUSD = ethers.BigNumber.from(swap.amountUSD);
-      const minUSDThreshold = ethers.utils.parseEther('1000'); // $1000 minimum
-      if (amountUSD.lt(minUSDThreshold)) {
+      // Check USD threshold if configured
+      if (this.config.minSwapUsd > 0 && amountInUsd < this.config.minSwapUsd) {
+        this.logger.debug({
+          msg: 'Swap below USD threshold',
+          candidateId: swap.candidateId,
+          amountInUsd,
+          minSwapUsd: this.config.minSwapUsd
+        });
         return false;
       }
 
-      // Additional profitability checks can be added here
       return true;
     } catch (error: any) {
       this.logger.debug({
-        msg: 'Error checking swap criteria',
-        swapId: swap.id,
-        error: error.message
+        err: error,
+        candidateId: swap.candidateId,
+        msg: 'Error validating swap thresholds'
       });
       return false;
+    }
+  }
+
+  /**
+   * Match swap to target pools by (tokenIn, tokenOut, feeTier)
+   */
+  private matchToTargetPool(swapData: PendingSwapDetected): any | null {
+    try {
+      // Try exact match
+      const exactKey = `${swapData.tokenIn}-${swapData.tokenOut}-${swapData.feeTier}`;
+      let match = this.targetPools.get(exactKey);
+      
+      if (match) {
+        this.logger.debug({
+          msg: 'Pool matched (exact)',
+          candidateId: swapData.candidateId,
+          poolKey: exactKey,
+          poolAddress: match.address
+        });
+        return match;
+      }
+
+      // Try reverse direction
+      const reverseKey = `${swapData.tokenOut}-${swapData.tokenIn}-${swapData.feeTier}`;
+      match = this.targetPools.get(reverseKey);
+      
+      if (match) {
+        this.logger.debug({
+          msg: 'Pool matched (reverse)',
+          candidateId: swapData.candidateId,
+          poolKey: reverseKey,
+          poolAddress: match.address
+        });
+        return match;
+      }
+
+      this.logger.debug({
+        msg: 'No pool match found',
+        candidateId: swapData.candidateId,
+        exactKey,
+        reverseKey,
+        availablePools: Array.from(this.targetPools.keys())
+      });
+
+      return null;
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        candidateId: swapData.candidateId,
+        msg: 'Error matching swap to target pool'
+      });
+      return null;
     }
   }
 
@@ -641,23 +879,91 @@ export class MempoolWatcher extends EventEmitter {
    */
   private convertToLegacyFormat(swapData: PendingSwapDetected, tx: ethers.providers.TransactionResponse): PendingSwap {
     return {
-      hash: swapData.id,
-      from: swapData.from,
-      to: swapData.to,
-      value: tx.value.toString(),
-      data: swapData.calldata,
+      hash: swapData.txHash,
+      from: tx.from!,
+      to: tx.to!,
+      value: tx.value?.toString() || '0',
+      data: tx.data,
       gasPrice: tx.gasPrice?.toString() || '0',
-      gasLimit: swapData.gasLimitEstimate,
-      nonce: tx.nonce,
-      pool: swapData.poolId,
+      gasLimit: tx.gasLimit?.toString() || '0',
+      nonce: tx.nonce || 0,
+      pool: swapData.poolAddress,
       tokenIn: swapData.tokenIn,
       tokenOut: swapData.tokenOut,
       amountIn: swapData.amountIn,
-      amountOutMinimum: swapData.amountOutEstimated,
-      expectedPrice: '0', // Legacy field
-      estimatedProfit: '0', // Legacy field
+      amountOutMinimum: '0',
+      expectedPrice: '0',
+      estimatedProfit: '0',
       rawTransaction: swapData.rawTxHex
     };
+  }
+
+  /**
+   * Get pool address for token pair and fee (simplified implementation)
+   */
+  private async getPoolAddress(tokenA: string, tokenB: string, fee: number): Promise<string> {
+    try {
+      // In production, this would query the Uniswap V3 Factory contract
+      // For now, check our configured pools for a match
+      for (const pool of this.config.pools) {
+        if ((pool.token0.toLowerCase() === tokenA.toLowerCase() && 
+             pool.token1.toLowerCase() === tokenB.toLowerCase() && 
+             pool.fee === fee) ||
+            (pool.token0.toLowerCase() === tokenB.toLowerCase() && 
+             pool.token1.toLowerCase() === tokenA.toLowerCase() && 
+             pool.fee === fee)) {
+          return pool.address;
+        }
+      }
+      
+      // Return a placeholder if no exact match found
+      return '0x0000000000000000000000000000000000000000';
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        tokenA,
+        tokenB,
+        fee,
+        msg: 'Error getting pool address'
+      });
+      return '0x0000000000000000000000000000000000000000';
+    }
+  }
+
+  /**
+   * Estimate USD value of amount for display purposes
+   */
+  private async estimateUSDValueForDisplay(tokenAddress: string, amount: ethers.BigNumber): Promise<string> {
+    try {
+      // Simplified USD estimation - in production this would use price oracles
+      const wethAddress = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
+      const usdcAddress = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+      
+      if (tokenAddress.toLowerCase() === wethAddress.toLowerCase()) {
+        // Assume 1 ETH = $3500 for estimation
+        const ethAmount = parseFloat(ethers.utils.formatEther(amount));
+        return (ethAmount * 3500).toFixed(2);
+      }
+      
+      if (tokenAddress.toLowerCase() === usdcAddress.toLowerCase()) {
+        // USDC is approximately $1
+        const usdcAmount = parseFloat(ethers.utils.formatUnits(amount, 6));
+        return usdcAmount.toFixed(2);
+      }
+      
+      // For other tokens, provide a conservative estimate
+      const ethEquivalent = parseFloat(ethers.utils.formatEther(amount));
+      return (ethEquivalent * 1000).toFixed(2); // Conservative estimate
+      
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        tokenAddress,
+        amount: amount.toString(),
+        msg: 'Error estimating USD value for display'
+      });
+      return '0';
+    }
   }
 
 
