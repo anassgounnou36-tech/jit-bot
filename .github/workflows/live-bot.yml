@@ -51,11 +51,6 @@ on:
         required: false
         default: 'heap'
         type: string
-      job_timeout_minutes:
-        description: 'Job timeout in minutes (total workflow timeout)'
-        required: false
-        default: 15
-        type: number
       artifact_timeout_minutes:
         description: 'Artifact upload timeout in minutes'
         required: false
@@ -75,7 +70,6 @@ jobs:
   live-bot-test:
     name: Run Live Bot for Limited Time
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
 
     permissions:
       contents: read
@@ -118,6 +112,28 @@ jobs:
           echo "TRACE_GC=$trace_gc" >> $GITHUB_ENV
           
           echo "✅ Debug options parsed -> heap=$enable_heap trace-gc=$trace_gc"
+
+      - name: Validate duration
+        run: |
+          duration=${{ inputs.duration_seconds }}
+          max_duration=900
+          override_long_run="${{ vars.OVERRIDE_LONG_RUN }}"
+          
+          echo "🔍 Validating duration: ${duration}s"
+          echo "   Max allowed: ${max_duration}s"
+          echo "   Override enabled: ${override_long_run}"
+          
+          if [ "$duration" -gt "$max_duration" ] && [ "$override_long_run" != "true" ]; then
+            echo "❌ SAFETY: Duration ${duration}s exceeds maximum ${max_duration}s"
+            echo "   To allow longer runs, set repository variable OVERRIDE_LONG_RUN='true'"
+            exit 1
+          fi
+          
+          if [ "$duration" -gt "$max_duration" ]; then
+            echo "⚠️  OVERRIDE: Running for ${duration}s (exceeds default maximum)"
+          else
+            echo "✅ Duration ${duration}s is within safety limits"
+          fi
 
       - name: Install dependencies
         run: npm ci
@@ -164,7 +180,7 @@ jobs:
           echo "   Debug Options: ${{ inputs.debug_options }}"
           echo "   Heap Snapshots: $ENABLE_HEAP_SNAPSHOT"
           echo "   GC Tracing: $TRACE_GC"
-          echo "   Job Timeout: ${{ inputs.job_timeout_minutes }} minutes"
+          echo "   Job Timeout: (managed internally)"
           echo "   Artifact Timeout: ${{ inputs.artifact_timeout_minutes }} minutes"
           echo "   Artifact Compression: Level ${{ inputs.artifact_compression_level }}"
           echo ""
@@ -212,7 +228,6 @@ jobs:
 
       - name: Start live bot with memory guard and timeout
         id: start-live-bot-with-timeout
-        timeout-minutes: ${{ inputs.job_timeout_minutes }}
         run: |
           echo "🚀 Starting bot for ${{ inputs.duration_seconds }} seconds"
           mkdir -p live-bot-logs
@@ -269,7 +284,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true
-        timeout-minutes: ${{ inputs.artifact_timeout_minutes }}
+        timeout-minutes: 5
         with:
           name: live-bot-logs-${{ github.run_number }}
           path: |
@@ -293,7 +308,7 @@ jobs:
           echo "**Fork Preflight:** ${{ inputs.fork_preflight }}" >> $GITHUB_STEP_SUMMARY
           echo "**Memory Guard:** ${{ inputs.memory_guard_mb }}MB" >> $GITHUB_STEP_SUMMARY
           echo "**Debug Options:** ${{ inputs.debug_options }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Job Timeout:** ${{ inputs.job_timeout_minutes }}m" >> $GITHUB_STEP_SUMMARY
+          echo "**Job Timeout:** (managed internally)" >> $GITHUB_STEP_SUMMARY
           echo "**Artifact Timeout:** ${{ inputs.artifact_timeout_minutes }}m" >> $GITHUB_STEP_SUMMARY
           echo "**Artifact Compression:** ${{ inputs.artifact_compression_level }}" >> $GITHUB_STEP_SUMMARY
           echo "**Heap Snapshot Produced:** $heap_snapshot_produced" >> $GITHUB_STEP_SUMMARY
