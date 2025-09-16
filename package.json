@@ -15,7 +15,7 @@
     "test:solidity": "hardhat test",
     "start": "node dist/src/bot/index.js",
     "dev": "ts-node src/bot/index.ts",
-    "live": "NODE_ENV=production ts-node src/bot/index.ts start",
+    "live": "NODE_ENV=production ts-node src/bot/index.ts",
     "deploy": "hardhat run scripts/deploy.ts",
     "deploy:fork": "hardhat run scripts/deploy.ts --network fork",
     "deploy:mainnet": "hardhat run scripts/deploy.ts --network mainnet",
