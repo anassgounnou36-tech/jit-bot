@@ -138,7 +138,7 @@ I_UNDERSTAND_LIVE_RISK=true
    ```bash
    NODE_ENV=production
    I_UNDERSTAND_LIVE_RISK=true
-   npm run live
+   npm run live -- start
    ```
 
 **Note:** Live execution requires explicit configuration and safety acknowledgments. The default mode remains simulation-only for maximum safety.
@@ -578,7 +578,7 @@ export JIT_CONTRACT_ADDRESS=0x...
 export PRIVATE_KEY=0x...
 
 # Start in live mode
-npm run live
+npm run live -- start
 ```
 
 ### Fork Simulation Mode
@@ -801,8 +801,13 @@ Environment variables for deployment:
 
 ```bash
 # Start in live mode (uses real funds!)
-NODE_ENV=production npm run live
+npm run live -- start
+
+# Quick status check
+npm run live:status
 ```
+
+**Cross-Platform Note:** The scripts now use `cross-env` for Windows compatibility. The `NODE_ENV=production` is handled automatically.
 
 ### Live Mode Features
 
@@ -1059,6 +1064,56 @@ jit-bot/
 | `SIMULATION_REPORT_DIR` | Reports directory | No | ./reports |
 
 ## 🔧 Troubleshooting
+
+### Windows Cross-Platform Compatibility
+
+The bot is now fully compatible with Windows thanks to cross-env. You can run the same commands on Windows CMD, PowerShell, or Unix systems.
+
+#### Running the Bot on Windows
+
+```bash
+# Simulation mode (safe testing)
+npm run dev
+
+# Production mode with live execution
+npm run live -- start
+
+# Quick status check
+npm run live:status
+```
+
+#### Setting Environment Variables
+
+**Option 1: PowerShell (Recommended)**
+```powershell
+# Set environment variables for current session
+$env:ENABLE_LIVE_EXECUTION = "true"
+$env:NODE_ENV = "production"
+$env:I_UNDERSTAND_LIVE_RISK = "true"
+npm run live -- start
+```
+
+**Option 2: Windows CMD**
+```cmd
+REM Set environment variables for current session  
+set ENABLE_LIVE_EXECUTION=true
+set NODE_ENV=production
+set I_UNDERSTAND_LIVE_RISK=true
+npm run live -- start
+```
+
+**Option 3: Use .env file (Cross-platform)**
+```bash
+# Create/edit .env file with your configuration
+echo ENABLE_LIVE_EXECUTION=true >> .env
+echo NODE_ENV=production >> .env
+echo I_UNDERSTAND_LIVE_RISK=true >> .env
+
+# Then run (works on all platforms)
+npm run live -- start
+```
+
+**Note:** The updated scripts use `cross-env` to handle environment variables consistently across Windows, macOS, and Linux. You no longer need to manually set `NODE_ENV` before running the `live` script.
 
 ### Fixing npm ERESOLVE on install (ethers v5)
 
