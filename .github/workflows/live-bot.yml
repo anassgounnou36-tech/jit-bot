@@ -6,7 +6,7 @@ on:
       duration_seconds:
         description: 'Duration to run the bot (seconds)'
         required: false
-        default: '180'
+        default: 180
         type: number
       execution_mode:
         description: 'Execution mode'
@@ -46,32 +46,26 @@ on:
         required: false
         default: '5600'
         type: string
-      enable_heap_snapshot:
-        description: 'Enable heap snapshots near heap limit for debugging'
+      debug_options:
+        description: 'Debug options (comma-separated): heap,trace-gc,none'
         required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      trace_gc:
-        description: 'Enable V8 garbage collection tracing (verbose logs)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
+        default: 'heap'
+        type: string
       job_timeout_minutes:
         description: 'Job timeout in minutes (total workflow timeout)'
         required: false
-        default: '15'
+        default: 15
         type: number
-      advanced_artifact:
-        description: 'Artifact settings as key=value pairs (e.g. "timeout=3,compression=6")'
+      artifact_timeout_minutes:
+        description: 'Artifact upload timeout in minutes'
         required: false
-        default: 'timeout=3,compression=6'
-        type: string
+        default: 3
+        type: number
+      artifact_compression_level:
+        description: 'Artifact compression level (0-9)'
+        required: false
+        default: 6
+        type: number
 
 concurrency:
   group: live-bot-run
@@ -97,27 +91,33 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Parse advanced artifact input
-        id: parse-advanced
+      - name: Parse debug options
+        id: parse-debug
         run: |
-          raw="${{ inputs.advanced_artifact }}"
-          # defaults
-          timeout="3"
-            compression="6"
-          # parse comma-separated key=value pairs
-          IFS=',' read -ra parts <<< "$raw"
-          for kv in "${parts[@]}"; do
-            k="${kv%%=*}"
-            v="${kv#*=}"
-            case "$k" in
-              timeout) timeout="$v" ;;
-              compression) compression="$v" ;;
-              *) echo "Ignoring unknown artifact setting: $k";;
+          raw="${{ inputs.debug_options }}"
+          echo "Parsing debug options: $raw"
+          
+          # Initialize defaults
+          enable_heap="false"
+          trace_gc="false"
+          
+          # Parse comma-separated values
+          IFS=',' read -ra options <<< "$raw"
+          for option in "${options[@]}"; do
+            option=$(echo "$option" | xargs)  # trim whitespace
+            case "$option" in
+              heap) enable_heap="true" ;;
+              trace-gc) trace_gc="true" ;;
+              none) ;;
+              *) echo "⚠️  Unknown debug option: $option (ignoring)" ;;
             esac
           done
-          echo "ARTIFACT_TIMEOUT_MINUTES=$timeout" >> $GITHUB_ENV
-          echo "ARTIFACT_COMPRESSION_LEVEL=$compression" >> $GITHUB_ENV
-          echo "Parsed artifact settings -> timeout=$timeout compression=$compression"
+          
+          # Set environment variables
+          echo "ENABLE_HEAP_SNAPSHOT=$enable_heap" >> $GITHUB_ENV
+          echo "TRACE_GC=$trace_gc" >> $GITHUB_ENV
+          
+          echo "✅ Debug options parsed -> heap=$enable_heap trace-gc=$trace_gc"
 
       - name: Install dependencies
         run: npm ci
@@ -161,11 +161,12 @@ jobs:
           echo "   Bot Command: ${{ inputs.bot_command }}"
           echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
           echo "   Memory Guard: ${{ inputs.memory_guard_mb }}MB"
-          echo "   Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
-          echo "   GC Tracing: ${{ inputs.trace_gc }}"
+          echo "   Debug Options: ${{ inputs.debug_options }}"
+          echo "   Heap Snapshots: $ENABLE_HEAP_SNAPSHOT"
+          echo "   GC Tracing: $TRACE_GC"
           echo "   Job Timeout: ${{ inputs.job_timeout_minutes }} minutes"
-          echo "   Artifact Timeout: $ARTIFACT_TIMEOUT_MINUTES minutes"
-          echo "   Artifact Compression: Level $ARTIFACT_COMPRESSION_LEVEL"
+          echo "   Artifact Timeout: ${{ inputs.artifact_timeout_minutes }} minutes"
+          echo "   Artifact Compression: Level ${{ inputs.artifact_compression_level }}"
           echo ""
           echo "🔐 Configured Secrets (masked):"
           echo "   RPC_URL_HTTP: ***"
@@ -194,10 +195,10 @@ jobs:
       - name: Prepare bot execution
         run: |
           NODE_OPTIONS_BASE="--max-old-space-size=6144"
-          if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
+          if [ "$ENABLE_HEAP_SNAPSHOT" = "true" ]; then
             NODE_OPTIONS_BASE="$NODE_OPTIONS_BASE --heapsnapshot-near-heap-limit=1"
           fi
-            if [ "${{ inputs.trace_gc }}" = "true" ]; then
+          if [ "$TRACE_GC" = "true" ]; then
             NODE_OPTIONS_BASE="$NODE_OPTIONS_BASE --trace-gc"
           fi
           echo "NODE_OPTIONS_FINAL=$NODE_OPTIONS_BASE" >> $GITHUB_ENV
@@ -234,7 +235,7 @@ jobs:
                 exit $ec
               fi
             }
-          if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
+          if [ "$ENABLE_HEAP_SNAPSHOT" = "true" ]; then
             if ls *.heapsnapshot 1>/dev/null 2>&1; then
               mv *.heapsnapshot live-bot-logs/ || true
             fi
@@ -268,7 +269,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true
-        timeout-minutes: ${{ env.ARTIFACT_TIMEOUT_MINUTES }}
+        timeout-minutes: ${{ inputs.artifact_timeout_minutes }}
         with:
           name: live-bot-logs-${{ github.run_number }}
           path: |
@@ -276,13 +277,13 @@ jobs:
             live-bot-logs/*.heapsnapshot
           if-no-files-found: ignore
           retention-days: 7
-          compression-level: ${{ env.ARTIFACT_COMPRESSION_LEVEL }}
+          compression-level: ${{ inputs.artifact_compression_level }}
 
       - name: Run summary
         if: always()
         run: |
           heap_snapshot_produced="false"
-          if [ "${{ inputs.enable_heap_snapshot }}" = "true" ] && ls live-bot-logs/*.heapsnapshot 1>/dev/null 2>&1; then
+          if [ "$ENABLE_HEAP_SNAPSHOT" = "true" ] && ls live-bot-logs/*.heapsnapshot 1>/dev/null 2>&1; then
             heap_snapshot_produced="true"
           fi
           echo "## 🤖 Live Bot Test Results" >> $GITHUB_STEP_SUMMARY
@@ -291,11 +292,12 @@ jobs:
           echo "**Command:** ${{ inputs.bot_command }}" >> $GITHUB_STEP_SUMMARY
           echo "**Fork Preflight:** ${{ inputs.fork_preflight }}" >> $GITHUB_STEP_SUMMARY
           echo "**Memory Guard:** ${{ inputs.memory_guard_mb }}MB" >> $GITHUB_STEP_SUMMARY
+          echo "**Debug Options:** ${{ inputs.debug_options }}" >> $GITHUB_STEP_SUMMARY
           echo "**Job Timeout:** ${{ inputs.job_timeout_minutes }}m" >> $GITHUB_STEP_SUMMARY
-          echo "**Artifact Timeout:** $ARTIFACT_TIMEOUT_MINUTES m" >> $GITHUB_STEP_SUMMARY
-          echo "**Artifact Compression:** $ARTIFACT_COMPRESSION_LEVEL" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact Timeout:** ${{ inputs.artifact_timeout_minutes }}m" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact Compression:** ${{ inputs.artifact_compression_level }}" >> $GITHUB_STEP_SUMMARY
           echo "**Heap Snapshot Produced:** $heap_snapshot_produced" >> $GITHUB_STEP_SUMMARY
-          echo "**GC Tracing:** ${{ inputs.trace_gc }}" >> $GITHUB_STEP_SUMMARY
+          echo "**GC Tracing:** $TRACE_GC" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.start-live-bot-with-timeout.outcome }}" = "success" ]; then
             echo "**Result:** ✅ COMPLETED" >> $GITHUB_STEP_SUMMARY
           else

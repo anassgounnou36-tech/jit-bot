@@ -66,8 +66,11 @@ This repository includes two GitHub Actions workflows for testing and running th
 - Execution mode: `ts-node` or `compiled`
 - Log level: `debug`, `info`, or `warn`
 - Memory guard: 1000-8000 MB (default: 5600)
-- Heap snapshots: Enable/disable (default: enabled)
-- GC tracing: Enable/disable (default: disabled)
+- Debug options: Comma-separated flags (default: heap)
+  - `heap`: Enable heap snapshots near heap limit for debugging
+  - `trace-gc`: Enable V8 garbage collection tracing (verbose logs)
+  - `none`: Disable all debug features
+  - Multiple options: `heap,trace-gc`
 - Node.js Heap: 6GB (automatically configured for memory-intensive operations)
 - Job timeout: 1-60 minutes (default: 15)
 - Artifact timeout: 1-10 minutes (default: 3)
