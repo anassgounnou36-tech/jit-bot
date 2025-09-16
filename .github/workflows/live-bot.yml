@@ -128,8 +128,58 @@ jobs:
     - name: Compile TypeScript (if needed)
       if: inputs.execution_mode == 'compiled'
       run: |
-        echo "🔨 Compiling TypeScript..."
-        npm run build:ts
+        echo "🔨 Compiling TypeScript for execution_mode: compiled..."
+        
+        # First try npm run build, but check if it actually produces TypeScript output
+        echo "Attempting npm run build..."
+        npm run build
+        
+        # Check if TypeScript compilation was actually done
+        if [ -f "dist/src/bot/index.js" ]; then
+          echo "✅ npm run build completed successfully and produced TypeScript output"
+        else
+          echo "⚠️  npm run build completed but did not produce TypeScript output, attempting fallback to npx tsc..."
+          npx tsc -p tsconfig.json || {
+            echo "❌ TypeScript compilation failed with both npm run build and npx tsc"
+            exit 1
+          }
+          echo "✅ Fallback TypeScript compilation completed"
+        fi
+        
+        # Verify the expected output file exists
+        if [ -f "dist/src/bot/index.js" ]; then
+          echo "✅ Verified: dist/src/bot/index.js exists"
+          ls -la dist/src/bot/index.js
+        else
+          echo "❌ CRITICAL: dist/src/bot/index.js was not created by compilation"
+          echo "📂 Directory listing of dist/:"
+          find dist/ -name "*.js" | head -20 || echo "No JS files found in dist/"
+          echo "📂 Full dist structure:"
+          ls -la dist/ || echo "dist/ directory does not exist"
+          exit 1
+        fi
+        
+    - name: Prepare bot execution
+      run: |
+        echo "🔧 Bot Execution Configuration:"
+        echo "   Execution Mode: ${{ inputs.execution_mode }}"
+        echo "   Duration: ${{ inputs.duration_seconds }} seconds"
+        echo "   Log Level: ${{ inputs.log_level }}"
+        echo ""
+        
+        # Determine the command to run
+        if [ "${{ inputs.execution_mode }}" = "compiled" ]; then
+          BOT_CMD="npm run start"
+          echo "🤖 Resolved Command: $BOT_CMD (compiled TypeScript)"
+          echo "📁 Expected Target: dist/src/bot/index.js"
+        else
+          BOT_CMD="npm run live"
+          echo "🤖 Resolved Command: $BOT_CMD (ts-node direct execution)"
+          echo "📁 Expected Target: src/bot/index.ts"
+        fi
+        
+        # Store the command for the next step
+        echo "BOT_CMD=$BOT_CMD" >> $GITHUB_ENV
         
     - name: Start live bot with timeout
       id: start-live-bot-with-timeout
@@ -142,13 +192,7 @@ jobs:
         # Create output directory for logs
         mkdir -p live-bot-logs
         
-        # Determine the command to run
-        if [ "${{ inputs.execution_mode }}" = "compiled" ]; then
-          BOT_CMD="npm run start"
-        else
-          BOT_CMD="npm run live"
-        fi
-        
+        # Use the command determined in the previous step
         echo "🤖 Command: $BOT_CMD"
         echo "🧠 Node.js heap: 6GB (via NODE_OPTIONS)"
         echo ""
