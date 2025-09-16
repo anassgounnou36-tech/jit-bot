@@ -5,20 +5,24 @@ import config from '../../config.json';
 import { getLogger } from '../logging/logger';
 
 export interface PendingSwapDetected {
-  id: string;
-  poolId: string;
-  poolFeeTier: number;
+  candidateId: string;
+  txHash: string;
+  rawTxHex: string;
+  poolAddress: string;
   tokenIn: string;
   tokenOut: string;
   amountIn: string;
-  amountOutEstimated: string;
-  amountUSD: string;
-  from: string;
-  to: string;
-  rawTxHex: string;
-  calldata: string;
-  gasLimitEstimate: string;
+  amountInHuman: string;
+  feeTier: number;
+  direction: 'token0->token1' | 'token1->token0';
+  estimatedUsd: string;
+  blockNumberSeen: number;
   timestamp: number;
+  provider: 'local-node' | 'alchemy' | 'blocknative';
+  decodedCall: {
+    method: string;
+    params: any;
+  };
 }
 
 // Legacy interface for backward compatibility
