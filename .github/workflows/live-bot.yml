@@ -25,6 +25,22 @@ on:
         - 'debug'
         - 'info'
         - 'warn'
+      bot_command:
+        description: 'Bot command to execute'
+        required: false
+        default: 'start'
+        type: choice
+        options:
+        - 'start'
+        - 'status'
+      fork_preflight:
+        description: 'Enable fork simulation preflight (high memory usage)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+        - 'true'
+        - 'false'
 
 concurrency:
   group: live-bot-run
@@ -100,6 +116,8 @@ jobs:
         echo "   Duration: ${{ inputs.duration_seconds }} seconds"
         echo "   Mode: ${{ inputs.execution_mode }}"
         echo "   Log Level: ${{ inputs.log_level }}"
+        echo "   Bot Command: ${{ inputs.bot_command }}"
+        echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
         echo "   Node.js Heap: 6GB (enhanced for memory-intensive operations)"
         echo ""
         echo "🔐 Configured Secrets (masked):"
@@ -114,6 +132,7 @@ jobs:
         echo "⚙️  Configured Variables:"
         echo "   SIMULATION_MODE: ${{ vars.SIMULATION_MODE }}"
         echo "   ENABLE_FLASHBOTS: ${{ vars.ENABLE_FLASHBOTS }}"
+        echo "   ENABLE_FORK_SIM_PREFLIGHT: ${{ inputs.fork_preflight }}"
         echo "   MAX_FLASHLOAN_AMOUNT_USD: ${{ vars.MAX_FLASHLOAN_AMOUNT_USD }}"
         echo "   GLOBAL_MIN_PROFIT_USD: ${{ vars.GLOBAL_MIN_PROFIT_USD }}"
         echo "   MAX_GAS_GWEI: ${{ vars.MAX_GAS_GWEI }}"
@@ -165,15 +184,17 @@ jobs:
         echo "   Execution Mode: ${{ inputs.execution_mode }}"
         echo "   Duration: ${{ inputs.duration_seconds }} seconds"
         echo "   Log Level: ${{ inputs.log_level }}"
+        echo "   Bot Command: ${{ inputs.bot_command }}"
+        echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
         echo ""
         
         # Determine the command to run
         if [ "${{ inputs.execution_mode }}" = "compiled" ]; then
-          BOT_CMD="npm run start"
+          BOT_CMD="npm run start -- ${{ inputs.bot_command }}"
           echo "🤖 Resolved Command: $BOT_CMD (compiled TypeScript)"
           echo "📁 Expected Target: dist/src/bot/index.js"
         else
-          BOT_CMD="npm run live"
+          BOT_CMD="npm run live -- ${{ inputs.bot_command }}"
           echo "🤖 Resolved Command: $BOT_CMD (ts-node direct execution)"
           echo "📁 Expected Target: src/bot/index.ts"
         fi
@@ -230,6 +251,8 @@ jobs:
         LOG_LEVEL: ${{ inputs.log_level }}
         # Node.js memory configuration - 6GB heap for GitHub-hosted runners
         NODE_OPTIONS: "--max-old-space-size=6144"
+        # Fork simulation preflight (controlled by input, defaults to false for CI safety)
+        ENABLE_FORK_SIM_PREFLIGHT: ${{ inputs.fork_preflight }}
         # Secrets
         RPC_URL_HTTP: ${{ secrets.RPC_URL_HTTP }}
         RPC_URL_WS: ${{ secrets.RPC_URL_WS }}
@@ -269,6 +292,8 @@ jobs:
         echo "**Test Type:** Limited-time live bot execution" >> $GITHUB_STEP_SUMMARY
         echo "**Duration:** ${{ inputs.duration_seconds }} seconds" >> $GITHUB_STEP_SUMMARY
         echo "**Mode:** ${{ inputs.execution_mode }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Bot Command:** ${{ inputs.bot_command }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Fork Preflight:** ${{ inputs.fork_preflight }}" >> $GITHUB_STEP_SUMMARY
         echo "**Node.js Heap:** 6GB (enhanced for memory-intensive operations)" >> $GITHUB_STEP_SUMMARY
         echo "**Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
