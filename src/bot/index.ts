@@ -753,21 +753,21 @@ export class JitBot {
 
 // CLI interface
 if (require.main === module) {
-  const bot = new JitBot();
-
-  // Handle command line arguments
+  // Handle command line arguments first, before instantiating the bot
   const command = process.argv[2];
 
   switch (command) {
     case 'start':
-      bot.start().catch(error => {
+      const botStart = new JitBot();
+      botStart.start().catch(error => {
         console.error('Failed to start bot:', error);
         process.exit(1);
       });
       break;
 
     case 'status':
-      console.log(JSON.stringify(bot.getStatus(), null, 2));
+      const botStatus = new JitBot();
+      console.log(JSON.stringify(botStatus.getStatus(), null, 2));
       break;
 
     default:
