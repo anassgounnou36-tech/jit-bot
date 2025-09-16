@@ -13,7 +13,7 @@
     "test:fork": "ts-mocha test/integration/**/*.test.ts --timeout 30000",
     "test:all": "npm run test:unit && npm run test:fork",
     "test:solidity": "hardhat test",
-    "start": "node dist/bot/index.js",
+    "start": "node dist/src/bot/index.js",
     "dev": "ts-node src/bot/index.ts",
     "live": "NODE_ENV=production ts-node src/bot/index.ts start",
     "deploy": "hardhat run scripts/deploy.ts",
