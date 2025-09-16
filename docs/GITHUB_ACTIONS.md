@@ -65,11 +65,14 @@ This repository includes two GitHub Actions workflows for testing and running th
 - Duration: 30-600 seconds (default: 180)
 - Execution mode: `ts-node` or `compiled`
 - Log level: `debug`, `info`, or `warn`
+- Node.js Heap: 6GB (automatically configured for memory-intensive operations)
 
 **Safety Features:**
 - Concurrency protection (only one run at a time)
-- Timeout protection (automatic shutdown)
+- **Enhanced timeout protection** (hard timeout with SIGTERM/SIGKILL enforcement)
+- **Memory management** (6GB Node.js heap to prevent out-of-memory crashes)
 - Preflight safety checks
+- **Reliable logging** (logs always uploaded regardless of execution outcome)
 - Comprehensive logging and artifacts
 
 **How to run:**
