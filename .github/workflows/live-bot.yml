@@ -41,6 +41,27 @@ on:
         options:
         - 'true'
         - 'false'
+      memory_guard_mb:
+        description: 'Memory guard limit in MB (protects against OOM)'
+        required: false
+        default: '5600'
+        type: string
+      enable_heap_snapshot:
+        description: 'Enable heap snapshots near heap limit for debugging'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+        - 'true'
+        - 'false'
+      trace_gc:
+        description: 'Enable V8 garbage collection tracing (verbose logs)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+        - 'true'
+        - 'false'
 
 concurrency:
   group: live-bot-run
@@ -118,6 +139,9 @@ jobs:
         echo "   Log Level: ${{ inputs.log_level }}"
         echo "   Bot Command: ${{ inputs.bot_command }}"
         echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
+        echo "   Memory Guard: ${{ inputs.memory_guard_mb }}MB"
+        echo "   Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
+        echo "   GC Tracing: ${{ inputs.trace_gc }}"
         echo "   Node.js Heap: 6GB (enhanced for memory-intensive operations)"
         echo ""
         echo "🔐 Configured Secrets (masked):"
@@ -186,13 +210,40 @@ jobs:
         echo "   Log Level: ${{ inputs.log_level }}"
         echo "   Bot Command: ${{ inputs.bot_command }}"
         echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
+        echo "   Memory Guard: ${{ inputs.memory_guard_mb }}MB"
+        echo "   Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
+        echo "   GC Tracing: ${{ inputs.trace_gc }}"
+        echo ""
+        
+        # Build NODE_OPTIONS based on inputs
+        NODE_OPTIONS_BASE="--max-old-space-size=6144"
+        
+        if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
+          NODE_OPTIONS_BASE="${NODE_OPTIONS_BASE} --heapsnapshot-near-heap-limit=1"
+          echo "🧠 Heap snapshots enabled - will capture snapshot before OOM"
+        fi
+        
+        if [ "${{ inputs.trace_gc }}" = "true" ]; then
+          NODE_OPTIONS_BASE="${NODE_OPTIONS_BASE} --trace-gc"
+          echo "🧠 GC tracing enabled - verbose garbage collection logs"
+        fi
+        
+        echo "NODE_OPTIONS_FINAL=$NODE_OPTIONS_BASE" >> $GITHUB_ENV
+        echo "🧠 Final NODE_OPTIONS: $NODE_OPTIONS_BASE"
         echo ""
         
         # Determine the command to run
         if [ "${{ inputs.execution_mode }}" = "compiled" ]; then
+          # Verify the compiled output exists
+          if [ ! -f "dist/src/bot/index.js" ]; then
+            echo "❌ CRITICAL: dist/src/bot/index.js not found - compiled execution requires this file"
+            echo "📂 Current dist structure:"
+            find dist/ -name "*.js" | head -10 || echo "No JS files found in dist/"
+            exit 1
+          fi
           BOT_CMD="npm run start -- ${{ inputs.bot_command }}"
           echo "🤖 Resolved Command: $BOT_CMD (compiled TypeScript)"
-          echo "📁 Expected Target: dist/src/bot/index.js"
+          echo "📁 Verified Target: dist/src/bot/index.js"
         else
           BOT_CMD="npm run live -- ${{ inputs.bot_command }}"
           echo "🤖 Resolved Command: $BOT_CMD (ts-node direct execution)"
@@ -202,27 +253,36 @@ jobs:
         # Store the command for the next step
         echo "BOT_CMD=$BOT_CMD" >> $GITHUB_ENV
         
-    - name: Start live bot with timeout
+    - name: Start live bot with memory guard and timeout
       id: start-live-bot-with-timeout
       run: |
-        echo "🚀 Starting live bot..."
+        echo "🚀 Starting live bot with memory guard..."
         echo "📅 Start time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
         echo "⏰ Duration: ${{ inputs.duration_seconds }} seconds"
+        echo "🛡️  Memory guard limit: ${{ inputs.memory_guard_mb }}MB"
         echo ""
         
         # Create output directory for logs
         mkdir -p live-bot-logs
         
-        # Use the command determined in the previous step
+        # Display effective settings
         echo "🤖 Command: $BOT_CMD"
-        echo "🧠 Node.js heap: 6GB (via NODE_OPTIONS)"
+        echo "🧠 NODE_OPTIONS: $NODE_OPTIONS_FINAL"
+        echo "🛡️  Memory Guard: ${{ inputs.memory_guard_mb }}MB"
+        echo "📸 Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
+        echo "🗑️  GC Tracing: ${{ inputs.trace_gc }}"
         echo ""
         
-        # Run the bot with hard timeout enforcement using GNU timeout
-        # --foreground: run in foreground to receive signals properly
-        # --kill-after=30: send SIGKILL after 30 seconds if SIGTERM doesn't work
-        # --signal=TERM: send SIGTERM first for graceful shutdown
-        timeout --foreground --kill-after=30 --signal=TERM ${{ inputs.duration_seconds }}s $BOT_CMD 2>&1 | tee live-bot-logs/bot-output.log || {
+        # Make memory guard script executable
+        chmod +x .github/scripts/run-with-memory-guard.sh
+        
+        # Run the bot with memory guard and hard timeout enforcement
+        # The memory guard will monitor RSS and terminate before OOM
+        # timeout provides additional protection at the process level
+        timeout --foreground --kill-after=30 --signal=TERM ${{ inputs.duration_seconds }}s \
+          ./.github/scripts/run-with-memory-guard.sh ${{ inputs.memory_guard_mb }} \
+          $BOT_CMD \
+          2>&1 | tee live-bot-logs/bot-output.log || {
           exit_code=$?
           if [ $exit_code -eq 124 ]; then
             echo ""
@@ -236,6 +296,12 @@ jobs:
             echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             echo "⚠️  Process required SIGKILL to terminate"
             exit 0
+          elif [ $exit_code -eq 0 ]; then
+            echo ""
+            echo "🛡️  Bot run completed - terminated by memory guard"
+            echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "✅ Memory guard prevented OOM crash"
+            exit 0
           else
             echo ""
             echo "❌ Bot exited with error code $exit_code"
@@ -246,11 +312,24 @@ jobs:
         echo ""
         echo "📊 Log files created in live-bot-logs/"
         ls -la live-bot-logs/
+        
+        # Check for heap snapshots
+        if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
+          echo ""
+          echo "📸 Checking for heap snapshots..."
+          if ls *.heapsnapshot 1> /dev/null 2>&1; then
+            echo "Found heap snapshots:"
+            ls -la *.heapsnapshot
+            mv *.heapsnapshot live-bot-logs/ 2>/dev/null || true
+          else
+            echo "No heap snapshots found (normal for short runs that don't hit heap limit)"
+          fi
+        fi
       env:
         NODE_ENV: production
         LOG_LEVEL: ${{ inputs.log_level }}
-        # Node.js memory configuration - 6GB heap for GitHub-hosted runners
-        NODE_OPTIONS: "--max-old-space-size=6144"
+        # Node.js memory configuration - composite based on inputs
+        NODE_OPTIONS: ${{ env.NODE_OPTIONS_FINAL }}
         # Fork simulation preflight (controlled by input, defaults to false for CI safety)
         ENABLE_FORK_SIM_PREFLIGHT: ${{ inputs.fork_preflight }}
         # Secrets
@@ -275,14 +354,14 @@ jobs:
         I_UNDERSTAND_LIVE_RISK: ${{ vars.I_UNDERSTAND_LIVE_RISK }}
         CONFIRM_MAINNET: ${{ vars.CONFIRM_MAINNET }}
         
-    - name: Upload bot logs
+    - name: Upload bot logs and artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: live-bot-logs-${{ github.run_number }}
         path: |
           live-bot-logs/
-        retention-days: 7
+        retention-days: 14
         
     - name: Run summary
       if: always()
@@ -294,6 +373,9 @@ jobs:
         echo "**Mode:** ${{ inputs.execution_mode }}" >> $GITHUB_STEP_SUMMARY
         echo "**Bot Command:** ${{ inputs.bot_command }}" >> $GITHUB_STEP_SUMMARY
         echo "**Fork Preflight:** ${{ inputs.fork_preflight }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Memory Guard:** ${{ inputs.memory_guard_mb }}MB" >> $GITHUB_STEP_SUMMARY
+        echo "**Heap Snapshots:** ${{ inputs.enable_heap_snapshot }}" >> $GITHUB_STEP_SUMMARY
+        echo "**GC Tracing:** ${{ inputs.trace_gc }}" >> $GITHUB_STEP_SUMMARY
         echo "**Node.js Heap:** 6GB (enhanced for memory-intensive operations)" >> $GITHUB_STEP_SUMMARY
         echo "**Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -304,14 +386,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Run Summary:" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Bot started successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Ran for configured duration" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Process terminated within timeout limits" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Logs captured and uploaded" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Ran with memory guard protection" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Completed within limits (timeout or memory guard)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Logs and artifacts captured and uploaded" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
           echo "1. Download the log artifacts to analyze bot behavior" >> $GITHUB_STEP_SUMMARY
           echo "2. Check for any opportunities detected or trades executed" >> $GITHUB_STEP_SUMMARY
-          echo "3. Monitor gas usage and profit calculations" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor memory usage patterns in the logs" >> $GITHUB_STEP_SUMMARY
+          echo "4. Review heap snapshots if OOM conditions were reached" >> $GITHUB_STEP_SUMMARY
         else
           echo "**Result:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -319,7 +402,8 @@ jobs:
           echo "1. Check the log artifacts for error details" >> $GITHUB_STEP_SUMMARY
           echo "2. Verify all secrets and variables are correctly configured" >> $GITHUB_STEP_SUMMARY
           echo "3. Ensure sufficient ETH balance for gas costs" >> $GITHUB_STEP_SUMMARY
-          echo "4. Check if the issue was a Node.js out-of-memory error (now mitigated with 6GB heap)" >> $GITHUB_STEP_SUMMARY
+          echo "4. Review memory usage patterns and heap snapshots if available" >> $GITHUB_STEP_SUMMARY
+          echo "5. Consider adjusting memory guard limit if hitting memory constraints" >> $GITHUB_STEP_SUMMARY
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -330,6 +414,9 @@ jobs:
         echo "Always monitor executions and ensure adequate safety limits are configured." >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🔧 Enhanced Features:" >> $GITHUB_STEP_SUMMARY
-        echo "- **Hard Timeout Enforcement:** Uses GNU timeout with SIGTERM/SIGKILL for reliable process termination" >> $GITHUB_STEP_SUMMARY
-        echo "- **Memory Management:** 6GB Node.js heap to prevent out-of-memory crashes during simulation" >> $GITHUB_STEP_SUMMARY
-        echo "- **Reliable Logging:** Logs are always uploaded regardless of execution outcome" >> $GITHUB_STEP_SUMMARY
+        echo "- **Memory Guard:** Monitors RSS usage and prevents OOM crashes" >> $GITHUB_STEP_SUMMARY
+        echo "- **Hard Timeout Enforcement:** Uses GNU timeout with SIGTERM/SIGKILL for reliable termination" >> $GITHUB_STEP_SUMMARY
+        echo "- **Heap Snapshots:** Captures heap snapshots near memory limits for debugging" >> $GITHUB_STEP_SUMMARY
+        echo "- **GC Tracing:** Optional verbose garbage collection logging" >> $GITHUB_STEP_SUMMARY
+        echo "- **Enhanced Memory Management:** 6GB Node.js heap with configurable options" >> $GITHUB_STEP_SUMMARY
+        echo "- **Reliable Logging:** Logs and artifacts always uploaded regardless of execution outcome" >> $GITHUB_STEP_SUMMARY

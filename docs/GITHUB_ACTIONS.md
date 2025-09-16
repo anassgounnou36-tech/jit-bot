@@ -65,15 +65,20 @@ This repository includes two GitHub Actions workflows for testing and running th
 - Duration: 30-600 seconds (default: 180)
 - Execution mode: `ts-node` or `compiled`
 - Log level: `debug`, `info`, or `warn`
+- Memory guard: 1000-8000 MB (default: 5600)
+- Heap snapshots: Enable/disable (default: enabled)
+- GC tracing: Enable/disable (default: disabled)
 - Node.js Heap: 6GB (automatically configured for memory-intensive operations)
 
 **Safety Features:**
 - Concurrency protection (only one run at a time)
+- **Memory guard protection** (monitors RSS usage and prevents OOM crashes)
 - **Enhanced timeout protection** (hard timeout with SIGTERM/SIGKILL enforcement)
-- **Memory management** (6GB Node.js heap to prevent out-of-memory crashes)
+- **Heap snapshot diagnostics** (captures memory snapshots before OOM for debugging)
+- **Enhanced memory management** (6GB Node.js heap with configurable options)
 - Preflight safety checks
-- **Reliable logging** (logs always uploaded regardless of execution outcome)
-- Comprehensive logging and artifacts
+- **Reliable logging** (logs and artifacts always uploaded regardless of execution outcome)
+- Comprehensive logging and artifacts with extended retention
 
 **How to run:**
 1. Configure all required secrets and variables in repository settings
