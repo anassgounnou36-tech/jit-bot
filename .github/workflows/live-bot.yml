@@ -100,6 +100,7 @@ jobs:
         echo "   Duration: ${{ inputs.duration_seconds }} seconds"
         echo "   Mode: ${{ inputs.execution_mode }}"
         echo "   Log Level: ${{ inputs.log_level }}"
+        echo "   Node.js Heap: 6GB (enhanced for memory-intensive operations)"
         echo ""
         echo "🔐 Configured Secrets (masked):"
         echo "   RPC_URL_HTTP: $(echo '${{ secrets.RPC_URL_HTTP }}' | sed 's/.*/***/g')"
@@ -131,6 +132,7 @@ jobs:
         npm run build:ts
         
     - name: Start live bot with timeout
+      id: start-live-bot-with-timeout
       run: |
         echo "🚀 Starting live bot..."
         echo "📅 Start time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -148,15 +150,27 @@ jobs:
         fi
         
         echo "🤖 Command: $BOT_CMD"
+        echo "🧠 Node.js heap: 6GB (via NODE_OPTIONS)"
         echo ""
         
-        # Run the bot with timeout and capture output
-        timeout ${{ inputs.duration_seconds }}s $BOT_CMD 2>&1 | tee live-bot-logs/bot-output.log || {
+        # Run the bot with hard timeout enforcement using GNU timeout
+        # --foreground: run in foreground to receive signals properly
+        # --kill-after=30: send SIGKILL after 30 seconds if SIGTERM doesn't work
+        # --signal=TERM: send SIGTERM first for graceful shutdown
+        timeout --foreground --kill-after=30 --signal=TERM ${{ inputs.duration_seconds }}s $BOT_CMD 2>&1 | tee live-bot-logs/bot-output.log || {
           exit_code=$?
           if [ $exit_code -eq 124 ]; then
             echo ""
             echo "⏰ Bot run completed - reached timeout limit of ${{ inputs.duration_seconds }} seconds"
             echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "✅ Process terminated gracefully by timeout"
+            exit 0
+          elif [ $exit_code -eq 137 ]; then
+            echo ""
+            echo "⏰ Bot run completed - forcefully killed after timeout grace period"
+            echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "⚠️  Process required SIGKILL to terminate"
+            exit 0
           else
             echo ""
             echo "❌ Bot exited with error code $exit_code"
@@ -170,6 +184,8 @@ jobs:
       env:
         NODE_ENV: production
         LOG_LEVEL: ${{ inputs.log_level }}
+        # Node.js memory configuration - 6GB heap for GitHub-hosted runners
+        NODE_OPTIONS: "--max-old-space-size=6144"
         # Secrets
         RPC_URL_HTTP: ${{ secrets.RPC_URL_HTTP }}
         RPC_URL_WS: ${{ secrets.RPC_URL_WS }}
@@ -209,15 +225,18 @@ jobs:
         echo "**Test Type:** Limited-time live bot execution" >> $GITHUB_STEP_SUMMARY
         echo "**Duration:** ${{ inputs.duration_seconds }} seconds" >> $GITHUB_STEP_SUMMARY
         echo "**Mode:** ${{ inputs.execution_mode }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Node.js Heap:** 6GB (enhanced for memory-intensive operations)" >> $GITHUB_STEP_SUMMARY
         echo "**Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ $? -eq 0 ] || [ $? -eq 124 ]; then
+        # Check if the bot execution step succeeded (exit codes 0, 124, 137 are all considered successful completions)
+        if [ "${{ steps.start-live-bot-with-timeout.outcome }}" = "success" ]; then
           echo "**Result:** ✅ COMPLETED" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Run Summary:" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Bot started successfully" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Ran for configured duration" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Process terminated within timeout limits" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Logs captured and uploaded" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
@@ -231,6 +250,7 @@ jobs:
           echo "1. Check the log artifacts for error details" >> $GITHUB_STEP_SUMMARY
           echo "2. Verify all secrets and variables are correctly configured" >> $GITHUB_STEP_SUMMARY
           echo "3. Ensure sufficient ETH balance for gas costs" >> $GITHUB_STEP_SUMMARY
+          echo "4. Check if the issue was a Node.js out-of-memory error (now mitigated with 6GB heap)" >> $GITHUB_STEP_SUMMARY
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -239,3 +259,8 @@ jobs:
         echo "### ⚠️ Safety Notice:" >> $GITHUB_STEP_SUMMARY
         echo "This workflow runs the bot with real funds and smart contracts." >> $GITHUB_STEP_SUMMARY
         echo "Always monitor executions and ensure adequate safety limits are configured." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔧 Enhanced Features:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Hard Timeout Enforcement:** Uses GNU timeout with SIGTERM/SIGKILL for reliable process termination" >> $GITHUB_STEP_SUMMARY
+        echo "- **Memory Management:** 6GB Node.js heap to prevent out-of-memory crashes during simulation" >> $GITHUB_STEP_SUMMARY
+        echo "- **Reliable Logging:** Logs are always uploaded regardless of execution outcome" >> $GITHUB_STEP_SUMMARY
