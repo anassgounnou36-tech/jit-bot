@@ -8,6 +8,7 @@ import { runPreflightSimulation } from '../simulator/forkSim';
 import { getGasPriceGwei, checkGasPrice } from '../util/gasEstimator';
 import { getFlashbotsManager } from '../exec/flashbots';
 import { getFlashloanOrchestrator } from '../exec/flashloan';
+import { MempoolWatcher, PendingSwapDetected } from '../watcher/mempoolWatcher';
 
 export interface PendingSwap {
   hash: string;
@@ -43,6 +44,7 @@ export class JitBot {
   private metrics: any;
   private flashbotsManager: any;
   private flashloanOrchestrator: any;
+  private mempoolWatcher: MempoolWatcher;
   private isRunning: boolean = false;
   private opportunities: Map<string, JitOpportunity> = new Map();
 
@@ -65,8 +67,16 @@ export class JitBot {
       port: this.config.prometheusPort
     });
     
-    // Initialize PR2 components
-    if (this.config.enableFlashbots) {
+    // Initialize MempoolWatcher - always on for real-time monitoring
+    this.mempoolWatcher = new MempoolWatcher(
+      this.config,
+      this.wsProvider,
+      this.httpProvider,
+      this.metrics
+    );
+    
+    // Initialize Flashbots and Flashloan components for live execution
+    if (!this.config.dryRun) {
       this.flashbotsManager = getFlashbotsManager();
     }
     
@@ -77,12 +87,14 @@ export class JitBot {
     
     this.logger.info({
       msg: 'JIT Bot initialized',
-      mode: this.config.enableLiveExecution ? 'live' : 'simulation',
+      mode: this.config.dryRun ? 'dry-run' : 'live',
       chain: this.config.chain,
       poolCount: this.config.poolIds.length,
-      flashbotsEnabled: this.config.enableFlashbots,
-      preflightEnabled: this.config.enableForkSimPreflight,
-      flashloanProvider: this.config.flashloanProvider
+      flashbotsEnabled: !this.config.dryRun,
+      mempoolWatcherEnabled: true,
+      flashloanPriority: this.config.flashloanPriority,
+      minSwapEth: this.config.minSwapEth,
+      globalMinProfitUsd: this.config.globalMinProfitUsd
     });
 
     this.setupEventHandlers();
@@ -147,13 +159,13 @@ export class JitBot {
       // Validate configuration
       await this.validateConfiguration();
 
-      // Start monitoring (simulation only in PR1)
-      await this.startMonitoring();
+      // Start mempool monitoring - always on
+      await this.startMempoolMonitoring();
 
       this.isRunning = true;
       this.logger.info({ 
         msg: 'JIT Bot started successfully',
-        mode: this.config.simulationMode ? 'SIMULATION' : 'LIVE'
+        mode: this.config.dryRun ? 'DRY-RUN' : 'LIVE'
       });
 
       // Keep the process alive and run periodic tasks
@@ -173,6 +185,11 @@ export class JitBot {
     logShutdown('Manual shutdown');
 
     try {
+      // Stop mempool watcher
+      if (this.mempoolWatcher) {
+        await this.mempoolWatcher.stop();
+      }
+      
       // Stop WebSocket provider
       if (this.wsProvider) {
         this.wsProvider.removeAllListeners();
@@ -274,83 +291,82 @@ export class JitBot {
     this.logger.info({ msg: 'Configuration validated successfully' });
   }
 
-  private async startMonitoring(): Promise<void> {
-    this.logger.info({ msg: 'Starting pool monitoring (simulation mode)...' });
+  private async startMempoolMonitoring(): Promise<void> {
+    this.logger.info({ msg: 'Starting real-time mempool monitoring...' });
     
-    // In PR1, we only simulate monitoring - no real mempool watching
-    // This demonstrates the monitoring loop without actual swap detection
+    // Setup mempool watcher event handlers
+    this.mempoolWatcher.on('PendingSwapDetected', (swapData: PendingSwapDetected) => {
+      this.handleMempoolSwapDetected(swapData).catch(error => {
+        this.logger.error({
+          err: error,
+          candidateId: swapData.candidateId,
+          msg: 'Error handling mempool swap detection'
+        });
+      });
+    });
+
+    // Start the mempool watcher
+    await this.mempoolWatcher.start();
     
     this.logger.info({ 
-      msg: 'Monitoring started in simulation mode',
-      note: 'Real mempool monitoring will be added in PR2'
+      msg: 'Real-time mempool monitoring started',
+      targetPools: this.config.poolIds.length,
+      minSwapEth: this.config.minSwapEth,
+      minSwapUsd: this.config.minSwapUsd
     });
   }
 
-  // Simulate processing a swap opportunity (for demonstration)
-  private async simulateOpportunityProcessing(): Promise<void> {
-    // This demonstrates how opportunities would be processed
-    const pools = this.config.pools;
-    if (pools.length === 0) return;
-    
-    const randomPool = pools[Math.floor(Math.random() * pools.length)];
-    const mockSwap: PendingSwap = {
-      hash: `0x${Math.random().toString(16).slice(2, 66)}`,
-      pool: randomPool.address,
-      tokenIn: randomPool.token0,
-      tokenOut: randomPool.token1,
-      amountIn: ethers.utils.parseEther('10').toString(), // 10 ETH swap
-      gasPrice: ethers.utils.parseUnits('20', 'gwei').toString()
-    };
-
-    await this.handleOpportunity(mockSwap);
-  }
-
-  private async handleOpportunity(swap: PendingSwap): Promise<void> {
-    const candidateLogger = createCandidateLogger(swap.pool, swap.hash);
+  /**
+   * Handle detected swap from mempool
+   */
+  private async handleMempoolSwapDetected(swapData: PendingSwapDetected): Promise<void> {
+    const candidateLogger = createCandidateLogger(swapData.poolAddress, swapData.txHash);
     const traceId = candidateLogger.bindings().traceId;
     
     const opportunity: JitOpportunity = {
       traceId,
-      candidateId: swap.hash,
-      poolAddress: swap.pool,
-      swapHash: swap.hash,
-      amountIn: ethers.BigNumber.from(swap.amountIn),
-      tokenIn: swap.tokenIn,
-      tokenOut: swap.tokenOut,
+      candidateId: swapData.candidateId,
+      poolAddress: swapData.poolAddress,
+      swapHash: swapData.txHash,
+      amountIn: ethers.BigNumber.from(swapData.amountIn),
+      tokenIn: swapData.tokenIn,
+      tokenOut: swapData.tokenOut,
       estimatedProfitUsd: 0,
-      gasPrice: ethers.BigNumber.from(swap.gasPrice || '20000000000'),
+      gasPrice: ethers.BigNumber.from('20000000000'), // Default gas price
       stage: 'detected',
       profitable: false,
-      reason: 'Opportunity detected'
+      reason: 'Mempool swap detected'
     };
 
+    await this.processJitOpportunity(opportunity, candidateLogger);
+  }
+
+  /**
+   * Process JIT opportunity from mempool detection
+   */
+  private async processJitOpportunity(opportunity: JitOpportunity, candidateLogger: any): Promise<void> {
     try {
       // Record opportunity detection
-      this.metrics.recordOpportunityDetected(swap.pool);
-      this.opportunities.set(swap.hash, opportunity);
+      this.metrics.recordOpportunityDetected(opportunity.poolAddress);
+      this.opportunities.set(opportunity.candidateId, opportunity);
 
       logJitOpportunity(candidateLogger, {
-        traceId,
-        candidateId: swap.hash,
-        poolAddress: swap.pool,
-        swapHash: swap.hash,
-        amountIn: swap.amountIn,
-        tokenIn: swap.tokenIn,
-        tokenOut: swap.tokenOut,
-        estimatedProfitUsd: 0,
-        gasPrice: swap.gasPrice || '20000000000',
+        traceId: opportunity.traceId,
+        candidateId: opportunity.candidateId,
+        poolAddress: opportunity.poolAddress,
+        swapHash: opportunity.swapHash,
+        amountIn: opportunity.amountIn.toString(),
+        tokenIn: opportunity.tokenIn,
+        tokenOut: opportunity.tokenOut,
+        estimatedProfitUsd: opportunity.estimatedProfitUsd,
+        gasPrice: opportunity.gasPrice.toString(),
         timestamp: Date.now(),
         stage: 'detected'
       });
 
-      // Step 1: Quick profitability check
-      const quickCheck = await quickProfitabilityCheck({
-        poolAddress: swap.pool,
-        swapAmountIn: ethers.BigNumber.from(swap.amountIn),
-        swapTokenIn: swap.tokenIn,
-        swapTokenOut: swap.tokenOut
-      }, this.config.globalMinProfitUsd);
-
+      // Step 1: Quick profitability check with new config
+      const quickCheck = await this.performQuickProfitabilityCheck(opportunity);
+      
       if (!quickCheck.profitable) {
         opportunity.stage = 'failed';
         opportunity.reason = quickCheck.reason;
@@ -358,14 +374,15 @@ export class JitBot {
         candidateLogger.info({
           msg: 'Quick profitability check failed',
           estimatedProfitUsd: quickCheck.estimatedProfitUsd,
-          minThreshold: this.config.globalMinProfitUsd
+          minThreshold: this.config.globalMinProfitUsd,
+          reason: quickCheck.reason
         });
 
-        this.metrics.recordJitFailure(swap.pool, 'unprofitable');
+        this.metrics.recordJitFailure(opportunity.poolAddress, 'unprofitable');
         return;
       }
 
-      // Check gas price check
+      // Step 2: Check gas price
       const gasCheck = await checkGasPrice();
       if (!gasCheck.acceptable) {
         opportunity.stage = 'failed';
@@ -377,7 +394,7 @@ export class JitBot {
           maxGwei: gasCheck.maxGwei
         });
 
-        this.metrics.recordJitFailure(swap.pool, 'gas_price');
+        this.metrics.recordJitFailure(opportunity.poolAddress, 'gas_price');
         return;
       }
 
@@ -385,14 +402,13 @@ export class JitBot {
       this.metrics.updateGasPrice(gasCheck.currentGwei);
 
       // Step 3: Record attempt and perform detailed simulation
-      // Increment jit_attempt_total when candidate is queued for fastSim
-      this.metrics.incrementJitAttempt(swap.pool);
+      this.metrics.incrementJitAttempt(opportunity.poolAddress);
       
       const fastResult = await fastSimulate({
-        poolAddress: swap.pool,
-        swapAmountIn: ethers.BigNumber.from(swap.amountIn),
-        swapTokenIn: swap.tokenIn,
-        swapTokenOut: swap.tokenOut
+        poolAddress: opportunity.poolAddress,
+        swapAmountIn: opportunity.amountIn,
+        swapTokenIn: opportunity.tokenIn,
+        swapTokenOut: opportunity.tokenOut
       });
 
       opportunity.stage = 'simulated';
@@ -401,8 +417,8 @@ export class JitBot {
       opportunity.reason = fastResult.reason || 'Simulation completed';
 
       // Update metrics
-      this.metrics.updateSimulatedProfit(swap.pool, fastResult.expectedNetProfitUsd);
-      this.metrics.recordSimulationDuration('fast', swap.pool, 0.5); // Mock duration
+      this.metrics.updateSimulatedProfit(opportunity.poolAddress, fastResult.expectedNetProfitUsd);
+      this.metrics.recordSimulationDuration('fast', opportunity.poolAddress, 0.5); // Mock duration
 
       if (!fastResult.profitable) {
         candidateLogger.info({
@@ -411,99 +427,97 @@ export class JitBot {
           gasCostUsd: fastResult.gasCostUsd
         });
 
-        this.metrics.recordJitFailure(swap.pool, 'simulation_unprofitable');
+        this.metrics.recordJitFailure(opportunity.poolAddress, 'simulation_unprofitable');
         return;
       }
 
-      // Step 4: Fork Simulation Preflight (PR2)
-      if (this.config.enableForkSimPreflight) {
-        candidateLogger.info({ msg: 'Running fork simulation preflight' });
+      // Step 4: Fork Simulation (always enabled now)
+      candidateLogger.info({ msg: 'Running fork simulation preflight' });
+      
+      const preflightStartTime = Date.now();
+      this.metrics.incrementForkSimAttempt(opportunity.poolAddress);
+      
+      try {
+        const preflightResult = await runPreflightSimulation({
+          poolAddress: opportunity.poolAddress,
+          swapAmountIn: opportunity.amountIn,
+          swapTokenIn: opportunity.tokenIn,
+          swapTokenOut: opportunity.tokenOut,
+          tickLower: fastResult.optimalPosition.tickLower,
+          tickUpper: fastResult.optimalPosition.tickUpper,
+          liquidityAmount: fastResult.optimalPosition.liquidity,
+          gasPrice: opportunity.gasPrice
+        });
         
-        const preflightStartTime = Date.now();
-        this.metrics.incrementForkSimAttempt(swap.pool);
+        const preflightDuration = (Date.now() - preflightStartTime) / 1000;
+        this.metrics.recordPreflightDuration(opportunity.poolAddress, preflightDuration);
         
-        try {
-          const preflightResult = await runPreflightSimulation({
-            poolAddress: swap.pool,
-            swapAmountIn: ethers.BigNumber.from(swap.amountIn),
-            swapTokenIn: swap.tokenIn,
-            swapTokenOut: swap.tokenOut,
-            tickLower: fastResult.optimalPosition.tickLower,
-            tickUpper: fastResult.optimalPosition.tickUpper,
-            liquidityAmount: fastResult.optimalPosition.liquidity,
-            gasPrice: ethers.BigNumber.from(swap.gasPrice || '20000000000')
-          });
-          
-          const preflightDuration = (Date.now() - preflightStartTime) / 1000;
-          this.metrics.recordPreflightDuration(swap.pool, preflightDuration);
-          
-          if (!preflightResult.success) {
-            opportunity.stage = 'failed';
-            opportunity.reason = `Preflight failed: ${preflightResult.revertReason}`;
-            
-            candidateLogger.warn({
-              msg: 'Fork simulation preflight failed',
-              reason: preflightResult.revertReason,
-              validations: preflightResult.validations,
-              simulationSteps: preflightResult.simulationSteps
-            });
-            
-            this.metrics.incrementForkSimFailure(swap.pool, preflightResult.revertReason || 'unknown');
-            this.metrics.recordJitFailure(swap.pool, 'preflight_failed');
-            return;
-          }
-          
-          if (!preflightResult.profitable) {
-            opportunity.stage = 'failed';
-            opportunity.reason = 'Preflight simulation shows unprofitable';
-            
-            candidateLogger.info({
-              msg: 'Preflight simulation unprofitable',
-              expectedNetProfitUSD: preflightResult.expectedNetProfitUSD,
-              gasUsed: preflightResult.gasUsed,
-              breakdown: {
-                flashloanFee: ethers.utils.formatEther(preflightResult.breakdown.flashloanFee),
-                feesCollected: ethers.utils.formatEther(preflightResult.breakdown.estimatedFeesCollected),
-                gasCost: ethers.utils.formatEther(preflightResult.breakdown.estimatedGasCost)
-              }
-            });
-            
-            this.metrics.incrementForkSimFailure(swap.pool, 'unprofitable');
-            this.metrics.recordJitFailure(swap.pool, 'preflight_unprofitable');
-            return;
-          }
-          
-          // Successful preflight
-          this.metrics.incrementForkSimSuccess(swap.pool);
-          this.metrics.recordExpectedProfit(swap.pool, preflightResult.expectedNetProfitUSD);
-          
-          candidateLogger.info({
-            msg: 'Preflight simulation successful',
-            expectedNetProfitUSD: preflightResult.expectedNetProfitUSD,
-            gasUsed: preflightResult.gasUsed,
-            validations: preflightResult.validations
-          });
-          
-          // Update opportunity with preflight results
-          opportunity.estimatedProfitUsd = preflightResult.expectedNetProfitUSD;
-          
-        } catch (error: any) {
-          candidateLogger.error({
-            err: error,
-            msg: 'Preflight simulation error'
-          });
-          
-          this.metrics.incrementForkSimFailure(swap.pool, 'simulation_error');
-          this.metrics.recordJitFailure(swap.pool, 'preflight_error');
-          
+        if (!preflightResult.success) {
           opportunity.stage = 'failed';
-          opportunity.reason = `Preflight error: ${error.message}`;
+          opportunity.reason = `Preflight failed: ${preflightResult.revertReason}`;
+          
+          candidateLogger.warn({
+            msg: 'Fork simulation preflight failed',
+            reason: preflightResult.revertReason,
+            validations: preflightResult.validations,
+            simulationSteps: preflightResult.simulationSteps
+          });
+          
+          this.metrics.incrementForkSimFailure(opportunity.poolAddress, preflightResult.revertReason || 'unknown');
+          this.metrics.recordJitFailure(opportunity.poolAddress, 'preflight_failed');
           return;
         }
+        
+        if (!preflightResult.profitable) {
+          opportunity.stage = 'failed';
+          opportunity.reason = 'Preflight simulation shows unprofitable';
+          
+          candidateLogger.info({
+            msg: 'Preflight simulation unprofitable',
+            expectedNetProfitUSD: preflightResult.expectedNetProfitUSD,
+            gasUsed: preflightResult.gasUsed,
+            breakdown: {
+              flashloanFee: ethers.utils.formatEther(preflightResult.breakdown.flashloanFee),
+              feesCollected: ethers.utils.formatEther(preflightResult.breakdown.estimatedFeesCollected),
+              gasCost: ethers.utils.formatEther(preflightResult.breakdown.estimatedGasCost)
+            }
+          });
+          
+          this.metrics.incrementForkSimFailure(opportunity.poolAddress, 'unprofitable');
+          this.metrics.recordJitFailure(opportunity.poolAddress, 'preflight_unprofitable');
+          return;
+        }
+        
+        // Successful preflight
+        this.metrics.incrementForkSimSuccess(opportunity.poolAddress);
+        this.metrics.recordExpectedProfit(opportunity.poolAddress, preflightResult.expectedNetProfitUSD);
+        
+        candidateLogger.info({
+          msg: 'Preflight simulation successful',
+          expectedNetProfitUSD: preflightResult.expectedNetProfitUSD,
+          gasUsed: preflightResult.gasUsed,
+          validations: preflightResult.validations
+        });
+        
+        // Update opportunity with preflight results
+        opportunity.estimatedProfitUsd = preflightResult.expectedNetProfitUSD;
+        
+      } catch (error: any) {
+        candidateLogger.error({
+          err: error,
+          msg: 'Preflight simulation error'
+        });
+        
+        this.metrics.incrementForkSimFailure(opportunity.poolAddress, 'simulation_error');
+        this.metrics.recordJitFailure(opportunity.poolAddress, 'preflight_error');
+        
+        opportunity.stage = 'failed';
+        opportunity.reason = `Preflight error: ${error.message}`;
+        return;
       }
       
-      // Step 5: Live Execution (PR2)
-      if (this.config.enableLiveExecution && this.config.enableFlashbots) {
+      // Step 5: Live Execution or DRY RUN logging
+      if (!this.config.dryRun) {
         candidateLogger.info({ msg: 'Proceeding with live execution' });
         
         try {
@@ -516,24 +530,21 @@ export class JitBot {
           
           opportunity.stage = 'failed';
           opportunity.reason = `Live execution error: ${error.message}`;
-          this.metrics.recordJitFailure(swap.pool, 'execution_error');
+          this.metrics.recordJitFailure(opportunity.poolAddress, 'execution_error');
         }
       } else {
-        // Simulation mode - log what would have been executed
-        opportunity.stage = 'failed';
-        opportunity.reason = this.config.enableLiveExecution ? 
-          'Live execution disabled (ENABLE_FLASHBOTS=false)' :
-          'Live execution disabled (ENABLE_LIVE_EXECUTION=false)';
+        // DRY RUN mode - log what would have been executed
+        opportunity.stage = 'validated';
+        opportunity.reason = 'DRY RUN mode - execution blocked for safety';
         
         candidateLogger.info({
-          msg: 'Opportunity validated but execution blocked',
-          note: 'Live execution is disabled',
-          enableLiveExecution: this.config.enableLiveExecution,
-          enableFlashbots: this.config.enableFlashbots,
-          estimatedProfitUsd: opportunity.estimatedProfitUsd
+          msg: 'DRY RUN: Opportunity validated but execution blocked',
+          note: 'Set DRY_RUN=false to enable live execution',
+          estimatedProfitUsd: opportunity.estimatedProfitUsd,
+          wouldExecute: 'Flashbots bundle submission'
         });
         
-        this.metrics.recordJitFailure(swap.pool, 'live_execution_disabled');
+        this.metrics.incrementJitCandidatesProfitable(opportunity.poolAddress);
       }
 
     } catch (error: any) {
@@ -545,7 +556,7 @@ export class JitBot {
         msg: 'Opportunity processing failed'
       });
 
-      this.metrics.recordJitFailure(swap.pool, 'processing_error');
+      this.metrics.recordJitFailure(opportunity.poolAddress, 'processing_error');
     } finally {
       // Log final opportunity state
       logJitOpportunity(candidateLogger, {
@@ -564,12 +575,46 @@ export class JitBot {
         reason: opportunity.reason
       });
       
-      this.opportunities.set(swap.hash, opportunity);
+      this.opportunities.set(opportunity.candidateId, opportunity);
     }
   }
 
   /**
-   * Execute live JIT strategy using Flashbots and flashloans (PR2)
+   * Perform quick profitability check with new config parameters
+   */
+  private async performQuickProfitabilityCheck(opportunity: JitOpportunity): Promise<{
+    profitable: boolean;
+    estimatedProfitUsd: number;
+    reason: string;
+  }> {
+    try {
+      const quickCheck = await quickProfitabilityCheck({
+        poolAddress: opportunity.poolAddress,
+        swapAmountIn: opportunity.amountIn,
+        swapTokenIn: opportunity.tokenIn,
+        swapTokenOut: opportunity.tokenOut
+      }, this.config.globalMinProfitUsd);
+
+      // Apply capture ratio and risk buffer from config
+      const adjustedProfit = (quickCheck.estimatedProfitUsd * this.config.captureRatio) - this.config.riskBufferUsd;
+      
+      return {
+        profitable: adjustedProfit >= this.config.globalMinProfitUsd,
+        estimatedProfitUsd: adjustedProfit,
+        reason: adjustedProfit >= this.config.globalMinProfitUsd ? 'Profitable after adjustments' : 
+                `Adjusted profit ${adjustedProfit.toFixed(2)} below threshold ${this.config.globalMinProfitUsd}`
+      };
+    } catch (error: any) {
+      return {
+        profitable: false,
+        estimatedProfitUsd: 0,
+        reason: `Quick check error: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Execute live JIT strategy using Flashbots and flashloans
    */
   private async executeLiveJitStrategy(
     opportunity: JitOpportunity,
@@ -684,26 +729,15 @@ export class JitBot {
       if (this.isRunning) {
         this.logger.info({
           msg: 'JIT Bot status',
-          mode: this.config.enableLiveExecution ? 'LIVE' : 'SIMULATION',
+          mode: this.config.dryRun ? 'DRY-RUN' : 'LIVE',
           opportunities: this.opportunities.size,
           activelyMonitoring: this.config.poolIds.length,
-          flashbotsEnabled: this.config.enableFlashbots,
-          preflightEnabled: this.config.enableForkSimPreflight
+          mempoolWatcherActive: true,
+          minSwapEth: this.config.minSwapEth,
+          globalMinProfitUsd: this.config.globalMinProfitUsd
         });
       }
     }, 60000);
-
-    // Simulate opportunity detection every 30 seconds (for demo)
-    setInterval(() => {
-      if (this.isRunning) {
-        this.simulateOpportunityProcessing().catch(error => {
-          this.logger.error({
-            err: error,
-            msg: 'Error in simulated opportunity processing'
-          });
-        });
-      }
-    }, 30000);
 
     // Update system metrics every 10 seconds
     setInterval(async () => {
@@ -732,7 +766,7 @@ export class JitBot {
   getStatus(): any {
     return {
       isRunning: this.isRunning,
-      mode: this.config.enableLiveExecution ? 'live' : 'simulation',
+      mode: this.config.dryRun ? 'dry-run' : 'live',
       chain: this.config.chain,
       walletAddress: this.wallet.address,
       opportunities: Array.from(this.opportunities.values()),
@@ -741,10 +775,11 @@ export class JitBot {
         globalMinProfitUsd: this.config.globalMinProfitUsd,
         maxGasGwei: this.config.maxGasGwei,
         prometheusPort: this.config.prometheusPort,
-        enableLiveExecution: this.config.enableLiveExecution,
-        enableFlashbots: this.config.enableFlashbots,
-        enableForkSimPreflight: this.config.enableForkSimPreflight,
-        flashloanProvider: this.config.flashloanProvider
+        dryRun: this.config.dryRun,
+        liveRiskAcknowledged: this.config.liveRiskAcknowledged,
+        mempoolWatcherEnabled: true,
+        minSwapEth: this.config.minSwapEth,
+        flashloanPriority: this.config.flashloanPriority
       },
       metricsUrl: this.metrics.getMetricsUrl()
     };
@@ -789,13 +824,13 @@ if (require.main === module) {
       console.log('  status  - Show bot status');
       console.log('');
       console.log('Environment:');
-      console.log('  ENABLE_LIVE_EXECUTION=false - Enable live transaction execution (default: false)');
-      console.log('  ENABLE_FLASHBOTS=false - Enable Flashbots integration (default: false)');
-      console.log('  ENABLE_FORK_SIM_PREFLIGHT=true - Enable fork simulation preflight (default: true)');
+      console.log('  DRY_RUN=true - Safe mode with no live execution (default)');
+      console.log('  DRY_RUN=false - Enable live transaction execution (requires I_UNDERSTAND_LIVE_RISK=true)');
+      console.log('  I_UNDERSTAND_LIVE_RISK=true - Required for live execution mode');
       console.log('  NODE_ENV=development - Development mode (default)');
-      console.log('  NODE_ENV=production - Production mode (requires I_UNDERSTAND_LIVE_RISK=true for live execution)');
+      console.log('  NODE_ENV=production - Production mode (requires extra safety acknowledgment)');
       console.log('');
-      console.log('Safety: Live execution is disabled by default. Set appropriate flags to enable.');
+      console.log('Safety: DRY_RUN=true by default. Real mempool monitoring active but no live execution.');
       process.exit(1);
     }
   }

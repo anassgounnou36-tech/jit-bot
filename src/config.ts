@@ -35,22 +35,30 @@ export interface JitBotConfig {
   // Runtime configuration
   nodeEnv: 'development' | 'production';
   chain: 'ethereum' | 'arbitrum';
-  simulationMode: boolean; // Legacy, derived from !enableLiveExecution
   
-  // PR2: Live execution control
-  enableLiveExecution: boolean;
-  enableFlashbots: boolean;
-  enableForkSimPreflight: boolean;
+  // DRY RUN SAFETY - replaces old simulation flags
+  dryRun: boolean;
   liveRiskAcknowledged: boolean;
+  minRequiredEth: number;
   
   // Network configuration
   rpcUrlHttp: string;
   rpcUrlWs: string;
   forkBlockNumber?: number;
   
+  // External API Keys
+  etherscanApiKey?: string;
+  blocknativeApiKey?: string;
+  
+  // Swap Detection Thresholds
+  minSwapEth: number;
+  minSwapUsd: number;
+  
   // Gas and profit configuration
   maxGasGwei: number;
   globalMinProfitUsd: number;
+  captureRatio: number;
+  riskBufferUsd: number;
   
   // Pool configuration
   poolIds: string[];
@@ -58,18 +66,17 @@ export interface JitBotConfig {
   
   // Metrics configuration
   prometheusPort: number;
-  metricsPort?: number; // Deprecated
   
   // Wallet configuration
   privateKey: string;
-  executorPrivateKey?: string;
+  flashbotsSigningKey?: string;
   
   // Flashbots configuration
   flashbotsRelayUrl: string;
-  flashbotsPrivateKey?: string;
   
   // Flashloan configuration
-  flashloanProvider: string;
+  flashloanPriority: 'balancer-first' | 'aave-first';
+  allowReconstructRawTx: boolean;
   
   // Contract addresses
   jitContractAddress?: string;
@@ -85,6 +92,14 @@ export interface JitBotConfig {
   tickRangeWidth: number;
   gasPriceStrategy: string;
   slippageTolerance: number;
+  
+  // Deprecated flags (for warnings)
+  _deprecated?: {
+    simulationMode?: boolean;
+    enableLiveExecution?: boolean;
+    enableForkSimPreflight?: boolean;
+    metricsPort?: number;
+  };
 }
 
 /**
@@ -103,31 +118,39 @@ export function loadConfig(): JitBotConfig {
   const nodeEnv = (process.env.NODE_ENV || 'development') as 'development' | 'production';
   const chain = (process.env.CHAIN || 'ethereum') as 'ethereum' | 'arbitrum';
   
-  // PR2: New live execution flags
-  const enableLiveExecution = process.env.ENABLE_LIVE_EXECUTION === 'true';
-  const enableFlashbots = process.env.ENABLE_FLASHBOTS === 'true';
-  const enableForkSimPreflight = process.env.ENABLE_FORK_SIM_PREFLIGHT !== 'false'; // Default true
+  // DRY RUN SAFETY - primary execution control
+  const dryRun = process.env.DRY_RUN !== 'false'; // Default to true for safety
   const liveRiskAcknowledged = process.env.I_UNDERSTAND_LIVE_RISK === 'true';
+  const minRequiredEth = parseFloat(process.env.MIN_REQUIRED_ETH || '0.005');
   
-  // Legacy simulation mode (derived from live execution setting)
-  const simulationMode = !enableLiveExecution;
+  // Handle deprecated flags with warnings
+  const deprecated: any = {};
+  if (process.env.SIMULATION_MODE !== undefined) {
+    console.warn('⚠️  SIMULATION_MODE is deprecated. Use DRY_RUN instead.');
+    deprecated.simulationMode = process.env.SIMULATION_MODE === 'true';
+  }
+  if (process.env.ENABLE_LIVE_EXECUTION !== undefined) {
+    console.warn('⚠️  ENABLE_LIVE_EXECUTION is deprecated. Use DRY_RUN=false instead.');
+    deprecated.enableLiveExecution = process.env.ENABLE_LIVE_EXECUTION === 'true';
+  }
+  if (process.env.ENABLE_FORK_SIM_PREFLIGHT !== undefined) {
+    console.warn('⚠️  ENABLE_FORK_SIM_PREFLIGHT is deprecated. Fork simulation is always enabled.');
+    deprecated.enableForkSimPreflight = process.env.ENABLE_FORK_SIM_PREFLIGHT === 'true';
+  }
   
-  // Critical PR2 safety checks
-  if (enableLiveExecution) {
-    // Require Flashbots to be enabled for live execution
-    if (!enableFlashbots) {
+  // Critical safety validations
+  if (!dryRun) {
+    // Live execution requires explicit risk acknowledgment
+    if (!liveRiskAcknowledged) {
       throw new Error(
-        'CRITICAL ERROR: ENABLE_LIVE_EXECUTION=true requires ENABLE_FLASHBOTS=true. ' +
-        'Live execution without Flashbots is not supported for safety.'
+        'CRITICAL ERROR: Live execution (DRY_RUN=false) requires I_UNDERSTAND_LIVE_RISK=true. ' +
+        'This acknowledges the risks of automated transaction execution with real funds.'
       );
     }
     
-    // Production environment requires explicit risk acknowledgment
-    if (nodeEnv === 'production' && !liveRiskAcknowledged) {
-      throw new Error(
-        'CRITICAL ERROR: Live execution in production requires I_UNDERSTAND_LIVE_RISK=true. ' +
-        'This acknowledges the risks of automated transaction execution with real funds.'
-      );
+    // Production requires extra safety
+    if (nodeEnv === 'production') {
+      console.log('⚠️  PRODUCTION MODE with LIVE EXECUTION - Proceeding with extreme caution');
     }
   }
   
@@ -143,24 +166,36 @@ export function loadConfig(): JitBotConfig {
     throw new Error('RPC_URL_WS is required');
   }
   
+  // External API Keys
+  const etherscanApiKey = process.env.ETHERSCAN_API_KEY;
+  const blocknativeApiKey = process.env.BLOCKNATIVE_API_KEY;
+  
+  if (!blocknativeApiKey) {
+    console.warn('⚠️  BLOCKNATIVE_API_KEY not provided - mempool monitoring may be limited');
+  }
+  
+  // Swap Detection Thresholds
+  const minSwapEth = parseFloat(process.env.MIN_SWAP_ETH || '10');
+  const minSwapUsd = parseFloat(process.env.MIN_SWAP_USD || '0');
+  
   // Gas and profit configuration
   const maxGasGwei = parseFloat(process.env.MAX_GAS_GWEI || '100');
-  const globalMinProfitUsd = parseFloat(process.env.GLOBAL_MIN_PROFIT_USD || '10.0');
+  const globalMinProfitUsd = parseFloat(process.env.GLOBAL_MIN_PROFIT_USD || '20');
+  const captureRatio = parseFloat(process.env.CAPTURE_RATIO || '0.65');
+  const riskBufferUsd = parseFloat(process.env.RISK_BUFFER_USD || '0');
   
   // Pool configuration
   const poolIds = process.env.POOL_IDS ? process.env.POOL_IDS.split(',').map(id => id.trim()) : [];
   
   // Metrics configuration - handle deprecated METRICS_PORT
   let prometheusPort = parseInt(process.env.PROMETHEUS_PORT || '9090');
-  let metricsPort: number | undefined;
   
   if (process.env.METRICS_PORT && !process.env.PROMETHEUS_PORT) {
     console.warn('⚠️  METRICS_PORT is deprecated. Please use PROMETHEUS_PORT instead.');
     prometheusPort = parseInt(process.env.METRICS_PORT);
-    metricsPort = prometheusPort;
   } else if (process.env.METRICS_PORT) {
     console.warn('⚠️  METRICS_PORT is deprecated and will be ignored. Using PROMETHEUS_PORT instead.');
-    metricsPort = parseInt(process.env.METRICS_PORT);
+    deprecated.metricsPort = parseInt(process.env.METRICS_PORT);
   }
   
   // Wallet configuration
@@ -169,41 +204,38 @@ export function loadConfig(): JitBotConfig {
     throw new Error('PRIVATE_KEY is required');
   }
   
-  const executorPrivateKey = process.env.EXECUTOR_PRIVATE_KEY;
+  const flashbotsSigningKey = process.env.FLASHBOTS_SIGNING_KEY;
   
   // Validate private key format
   if (!privateKey.startsWith('0x') || privateKey.length !== 66) {
     throw new Error('PRIVATE_KEY must be a valid 32-byte hex string starting with 0x');
   }
   
-  if (executorPrivateKey && (!executorPrivateKey.startsWith('0x') || executorPrivateKey.length !== 66)) {
-    throw new Error('EXECUTOR_PRIVATE_KEY must be a valid 32-byte hex string starting with 0x');
+  if (flashbotsSigningKey && (!flashbotsSigningKey.startsWith('0x') || flashbotsSigningKey.length !== 66)) {
+    throw new Error('FLASHBOTS_SIGNING_KEY must be a valid 32-byte hex string starting with 0x');
+  }
+  
+  // Critical safety check: private keys must be different
+  if (flashbotsSigningKey && privateKey === flashbotsSigningKey) {
+    throw new Error(
+      'CRITICAL ERROR: PRIVATE_KEY and FLASHBOTS_SIGNING_KEY must be different for security. ' +
+      'Using the same key for both purposes creates unnecessary risk.'
+    );
   }
   
   // Flashbots configuration
   const flashbotsRelayUrl = process.env.FLASHBOTS_RELAY_URL || 'https://relay.flashbots.net';
-  const flashbotsPrivateKey = process.env.FLASHBOTS_PRIVATE_KEY;
   
-  // Validate Flashbots private key if live execution is enabled
-  if (enableLiveExecution && enableFlashbots) {
-    if (!flashbotsPrivateKey) {
-      throw new Error(
-        'FLASHBOTS_PRIVATE_KEY is required when ENABLE_LIVE_EXECUTION=true and ENABLE_FLASHBOTS=true'
-      );
-    }
-    
-    if (!flashbotsPrivateKey.startsWith('0x') || flashbotsPrivateKey.length !== 66) {
-      throw new Error('FLASHBOTS_PRIVATE_KEY must be a valid 32-byte hex string starting with 0x');
-    }
+  // Validate Flashbots signing key if live execution is enabled
+  if (!dryRun && !flashbotsSigningKey) {
+    throw new Error(
+      'FLASHBOTS_SIGNING_KEY is required when DRY_RUN=false (live execution mode)'
+    );
   }
   
-  // Warn about flashbots configuration in simulation mode
-  if (!enableLiveExecution && flashbotsPrivateKey) {
-    console.warn('⚠️  Flashbots configuration detected but will not be used in simulation mode');
-  }
-  
-  // Flashloan provider configuration
-  const flashloanProvider = process.env.FLASHLOAN_PROVIDER || 'aave-v3';
+  // Flashloan configuration
+  const flashloanPriority = (process.env.FLASHLOAN_PRIORITY || 'balancer-first') as 'balancer-first' | 'aave-first';
+  const allowReconstructRawTx = process.env.ALLOW_RECONSTRUCT_RAW_TX === 'true';
   
   // Contract configuration
   const jitContractAddress = process.env.JIT_CONTRACT_ADDRESS;
@@ -236,28 +268,36 @@ export function loadConfig(): JitBotConfig {
     }
   }
   
+  // Minimum balance check for live execution
+  if (!dryRun && minRequiredEth > 0) {
+    console.log(`⚠️  Live execution requires minimum balance: ${minRequiredEth} ETH`);
+  }
+  
   const config: JitBotConfig = {
     nodeEnv,
     chain,
-    simulationMode,
-    enableLiveExecution,
-    enableFlashbots,
-    enableForkSimPreflight,
+    dryRun,
     liveRiskAcknowledged,
+    minRequiredEth,
     rpcUrlHttp,
     rpcUrlWs,
     forkBlockNumber,
+    etherscanApiKey,
+    blocknativeApiKey,
+    minSwapEth,
+    minSwapUsd,
     maxGasGwei,
     globalMinProfitUsd,
+    captureRatio,
+    riskBufferUsd,
     poolIds,
     pools,
     prometheusPort,
-    metricsPort,
     privateKey,
-    executorPrivateKey,
+    flashbotsSigningKey,
     flashbotsRelayUrl,
-    flashbotsPrivateKey,
-    flashloanProvider,
+    flashloanPriority,
+    allowReconstructRawTx,
     jitContractAddress,
     chainConfig,
     flashLoanProviders: jsonConfig.flashLoanProviders || {},
@@ -268,33 +308,34 @@ export function loadConfig(): JitBotConfig {
     maxFlashloanAmountUSD: parseFloat(process.env.MAX_FLASHLOAN_AMOUNT_USD || jsonConfig.maxFlashloanAmountUSD?.toString() || '300000'),
     tickRangeWidth: jsonConfig.tickRangeWidth || 60,
     gasPriceStrategy: jsonConfig.gasPriceStrategy || 'aggressive',
-    slippageTolerance: jsonConfig.slippageTolerance || 0.005
+    slippageTolerance: jsonConfig.slippageTolerance || 0.005,
+    
+    // Include deprecated warnings if any were found
+    _deprecated: Object.keys(deprecated).length > 0 ? deprecated : undefined
   };
   
-  // Final simulation mode validation
-  validateLiveExecutionSafety(config);
+  // Final safety validation
+  validateExecutionSafety(config);
   
   return config;
 }
 
 /**
- * Validate live execution safety requirements
+ * Validate execution safety requirements
  */
-function validateLiveExecutionSafety(config: JitBotConfig): void {
-  if (config.enableLiveExecution) {
+function validateExecutionSafety(config: JitBotConfig): void {
+  if (!config.dryRun) {
     console.log('⚠️  LIVE EXECUTION ENABLED - This bot will execute real transactions with real funds');
-    console.log('⚠️  Ensure you understand the risks and have tested thoroughly in simulation mode');
+    console.log('⚠️  Ensure you understand the risks and have tested thoroughly in dry-run mode');
     
     if (config.nodeEnv === 'production') {
       console.log('⚠️  PRODUCTION MODE with LIVE EXECUTION - Proceeding with extreme caution');
     }
   } else {
-    console.log('✅ Simulation mode active - No live execution will occur');
+    console.log('✅ DRY RUN mode active - No live execution will occur');
   }
   
-  if (config.enableForkSimPreflight) {
-    console.log('✅ Fork simulation preflight enabled - Full validation before any execution');
-  }
+  console.log('✅ Fork simulation enabled - Full validation before any execution');
 }
 
 /**
@@ -325,16 +366,16 @@ export function getWallet(config: JitBotConfig, provider?: ethers.providers.Prov
 export function validateNoLiveExecution(operation: string): void {
   const config = getConfig();
   
-  if (!config.enableLiveExecution) {
+  if (config.dryRun) {
     throw new Error(
-      `BLOCKED: ${operation} requires ENABLE_LIVE_EXECUTION=true. ` +
-      'This operation is disabled for safety. Set ENABLE_LIVE_EXECUTION=true to enable live execution.'
+      `BLOCKED: ${operation} requires DRY_RUN=false. ` +
+      'This operation is disabled for safety. Set DRY_RUN=false and I_UNDERSTAND_LIVE_RISK=true to enable live execution.'
     );
   }
   
-  if (config.enableLiveExecution && !config.enableFlashbots) {
+  if (!config.dryRun && !config.flashbotsSigningKey) {
     throw new Error(
-      `BLOCKED: ${operation} requires ENABLE_FLASHBOTS=true when live execution is enabled. ` +
+      `BLOCKED: ${operation} requires FLASHBOTS_SIGNING_KEY when live execution is enabled. ` +
       'Live execution without Flashbots is not supported for safety.'
     );
   }

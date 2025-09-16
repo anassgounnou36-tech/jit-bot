@@ -10,7 +10,7 @@ module.exports = {
     RPC_URL_WS: 'wss://rpc.ankr.com/eth/ws',
     PRIVATE_KEY: '0x1111111111111111111111111111111111111111111111111111111111111111',
     CHAIN: 'ethereum',
-    SIMULATION_MODE: 'true',
+    DRY_RUN: 'true',
     MAX_GAS_GWEI: '100',
     PROMETHEUS_PORT: '3001'
   }

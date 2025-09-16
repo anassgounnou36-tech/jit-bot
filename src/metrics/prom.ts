@@ -3,7 +3,82 @@ import { register, Counter, Gauge, Histogram, collectDefaultMetrics } from 'prom
 import { getConfig } from '../config';
 import { getLogger, requestLoggingMiddleware } from '../logging/logger';
 
-// Metric definitions
+// Mempool monitoring metrics
+const mempoolTxsSeenTotal = new Counter({
+  name: 'mempool_txs_seen_total',
+  help: 'Total number of transactions seen in mempool',
+  labelNames: ['provider']
+});
+
+const mempoolTxsRawFetchedTotal = new Counter({
+  name: 'mempool_txs_raw_fetched_total',
+  help: 'Total number of raw transactions successfully fetched',
+  labelNames: ['method']
+});
+
+const mempoolTxsRawMissingTotal = new Counter({
+  name: 'mempool_txs_raw_missing_total',
+  help: 'Total number of transactions where raw tx data could not be retrieved',
+  labelNames: ['reason']
+});
+
+const mempoolSwapsDecodedTotal = new Counter({
+  name: 'mempool_swaps_decoded_total',
+  help: 'Total number of Uniswap swaps successfully decoded',
+  labelNames: ['method']
+});
+
+const mempoolSwapsMatchedTotal = new Counter({
+  name: 'mempool_swaps_matched_total',
+  help: 'Total number of swaps matched to target pools',
+  labelNames: ['pool']
+});
+
+const mempoolSwapsRejectedTotal = new Counter({
+  name: 'mempool_swaps_rejected_total',
+  help: 'Total number of swaps rejected during processing',
+  labelNames: ['reason']
+});
+
+// JIT strategy metrics
+const jitCandidatesProfitableTotal = new Counter({
+  name: 'jit_candidates_profitable_total',
+  help: 'Total number of profitable JIT candidates identified',
+  labelNames: ['pool']
+});
+
+const jitBundleSimulationsTotal = new Counter({
+  name: 'jit_bundle_simulations_total',
+  help: 'Total number of bundle simulations attempted',
+  labelNames: ['result', 'pool']
+});
+
+const jitBundleSubmissionsTotal = new Counter({
+  name: 'jit_bundle_submissions_total',
+  help: 'Total number of bundles submitted to Flashbots',
+  labelNames: ['result']
+});
+
+const jitBundleProfitUsd = new Gauge({
+  name: 'jit_bundle_profit_usd',
+  help: 'Last simulated bundle profit in USD',
+  labelNames: ['pool']
+});
+
+const jitBundleGasEstimate = new Gauge({
+  name: 'jit_bundle_gas_estimate',
+  help: 'Gas estimate for last bundle',
+  labelNames: ['pool']
+});
+
+// Flashloan provider metrics
+const flashloanProviderUsageTotal = new Counter({
+  name: 'flashloan_provider_usage_total',
+  help: 'Total usage of each flashloan provider',
+  labelNames: ['provider']
+});
+
+// Existing metrics
 const jitAttemptTotal = new Counter({
   name: 'jit_attempt_total',
   help: 'Total number of JIT strategy attempts',
@@ -256,11 +331,14 @@ export class PrometheusMetrics {
     this.app.get('/status', (_req, res) => {
       const config = getConfig();
       res.json({
-        mode: config.simulationMode ? 'simulation' : 'live',
+        mode: config.dryRun ? 'dry-run' : 'live',
         chain: config.chain,
         pools: config.poolIds,
         uptime: (Date.now() - this.startTime) / 1000,
-        version: '1.0.0-pr1'
+        version: '1.0.0-mempool',
+        dryRun: config.dryRun,
+        liveRiskAcknowledged: config.liveRiskAcknowledged,
+        minRequiredEth: config.minRequiredEth
       });
     });
   }
@@ -417,6 +495,55 @@ export class PrometheusMetrics {
 
   public recordExpectedProfit(pool: string, profitUsd: number): void {
     expectedProfitUsd.observe({ pool }, profitUsd);
+  }
+
+  // Mempool monitoring methods
+  public incrementMempoolTxsSeen(provider: string): void {
+    mempoolTxsSeenTotal.inc({ provider });
+  }
+
+  public incrementMempoolTxsRawFetched(method: string): void {
+    mempoolTxsRawFetchedTotal.inc({ method });
+  }
+
+  public incrementMempoolTxsRawMissing(reason: string): void {
+    mempoolTxsRawMissingTotal.inc({ reason });
+  }
+
+  public incrementMempoolSwapsDecoded(method: string): void {
+    mempoolSwapsDecodedTotal.inc({ method });
+  }
+
+  public incrementMempoolSwapsMatched(pool: string): void {
+    mempoolSwapsMatchedTotal.inc({ pool });
+  }
+
+  public incrementMempoolSwapsRejected(reason: string): void {
+    mempoolSwapsRejectedTotal.inc({ reason });
+  }
+
+  public incrementJitCandidatesProfitable(pool: string): void {
+    jitCandidatesProfitableTotal.inc({ pool });
+  }
+
+  public incrementJitBundleSimulations(result: string, pool: string): void {
+    jitBundleSimulationsTotal.inc({ result, pool });
+  }
+
+  public incrementJitBundleSubmissions(result: string): void {
+    jitBundleSubmissionsTotal.inc({ result });
+  }
+
+  public updateJitBundleProfitUsd(pool: string, profitUsd: number): void {
+    jitBundleProfitUsd.set({ pool }, profitUsd);
+  }
+
+  public updateJitBundleGasEstimate(pool: string, gasEstimate: number): void {
+    jitBundleGasEstimate.set({ pool }, gasEstimate);
+  }
+
+  public incrementFlashloanProviderUsage(provider: string): void {
+    flashloanProviderUsageTotal.inc({ provider });
   }
 
   // Utility methods
