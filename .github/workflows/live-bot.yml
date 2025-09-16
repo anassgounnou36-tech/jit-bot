@@ -14,33 +14,33 @@ on:
         default: 'ts-node'
         type: choice
         options:
-        - 'ts-node'
-        - 'compiled'
+          - 'ts-node'
+          - 'compiled'
       log_level:
         description: 'Log level'
         required: false
         default: 'info'
         type: choice
         options:
-        - 'debug'
-        - 'info'
-        - 'warn'
+          - 'debug'
+          - 'info'
+          - 'warn'
       bot_command:
         description: 'Bot command to execute'
         required: false
         default: 'start'
         type: choice
         options:
-        - 'start'
-        - 'status'
+          - 'start'
+          - 'status'
       fork_preflight:
         description: 'Enable fork simulation preflight (high memory usage)'
         required: false
         default: 'false'
         type: choice
         options:
-        - 'true'
-        - 'false'
+          - 'true'
+          - 'false'
       memory_guard_mb:
         description: 'Memory guard limit in MB (protects against OOM)'
         required: false
@@ -52,31 +52,26 @@ on:
         default: 'true'
         type: choice
         options:
-        - 'true'
-        - 'false'
+          - 'true'
+          - 'false'
       trace_gc:
         description: 'Enable V8 garbage collection tracing (verbose logs)'
         required: false
         default: 'false'
         type: choice
         options:
-        - 'true'
-        - 'false'
+          - 'true'
+          - 'false'
       job_timeout_minutes:
         description: 'Job timeout in minutes (total workflow timeout)'
         required: false
         default: '15'
         type: number
-      artifact_timeout_minutes:
-        description: 'Artifact upload timeout in minutes'
+      advanced_artifact:
+        description: 'Artifact settings as key=value pairs (e.g. "timeout=3,compression=6")'
         required: false
-        default: '3'
-        type: number
-      artifact_compression_level:
-        description: 'Artifact compression level (0-9, higher = more compression)'
-        required: false
-        default: '6'
-        type: number
+        default: 'timeout=3,compression=6'
+        type: string
 
 concurrency:
   group: live-bot-run
@@ -87,372 +82,227 @@ jobs:
     name: Run Live Bot for Limited Time
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
-    
+
     permissions:
       contents: read
       actions: read
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-        
-    - name: Install dependencies
-      run: npm ci
-      
-    - name: Preflight checks - Required secrets
-      run: |
-        echo "🔍 Checking required secrets..."
-        
-        # Check critical secrets
-        if [ -z "${{ secrets.RPC_URL_HTTP }}" ]; then
-          echo "❌ CRITICAL: RPC_URL_HTTP secret is not set"
-          exit 1
-        fi
-        
-        if [ -z "${{ secrets.PRIVATE_KEY }}" ]; then
-          echo "❌ CRITICAL: PRIVATE_KEY secret is not set"
-          exit 1
-        fi
-        
-        if [ -z "${{ secrets.ETHERSCAN_API_KEY }}" ]; then
-          echo "❌ CRITICAL: ETHERSCAN_API_KEY secret is not set"
-          exit 1
-        fi
-        
-        echo "✅ All required secrets are present"
-        
-    - name: Preflight checks - Safety toggles
-      run: |
-        echo "🔒 Checking safety toggles..."
-        
-        # Check safety acknowledgment
-        if [ "${{ vars.I_UNDERSTAND_LIVE_RISK }}" != "true" ]; then
-          echo "❌ SAFETY: I_UNDERSTAND_LIVE_RISK must be set to 'true' in repository variables"
-          echo "   This confirms you understand the risks of running the bot with real funds"
-          exit 1
-        fi
-        
-        # Check mainnet confirmation
-        if [ "${{ vars.CONFIRM_MAINNET }}" != "true" ]; then
-          echo "❌ SAFETY: CONFIRM_MAINNET must be set to 'true' in repository variables"
-          echo "   This confirms you want to run on mainnet"
-          exit 1
-        fi
-        
-        echo "✅ Safety toggles confirmed"
-        
-    - name: Environment summary
-      run: |
-        echo "🔧 Environment Configuration Summary:"
-        echo "   Duration: ${{ inputs.duration_seconds }} seconds"
-        echo "   Mode: ${{ inputs.execution_mode }}"
-        echo "   Log Level: ${{ inputs.log_level }}"
-        echo "   Bot Command: ${{ inputs.bot_command }}"
-        echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
-        echo "   Memory Guard: ${{ inputs.memory_guard_mb }}MB"
-        echo "   Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
-        echo "   GC Tracing: ${{ inputs.trace_gc }}"
-        echo "   Node.js Heap: 6GB (enhanced for memory-intensive operations)"
-        echo "   Job Timeout: ${{ inputs.job_timeout_minutes }} minutes"
-        echo "   Artifact Timeout: ${{ inputs.artifact_timeout_minutes }} minutes"
-        echo "   Artifact Compression: Level ${{ inputs.artifact_compression_level }}"
-        echo ""
-        echo "🔐 Configured Secrets (masked):"
-        echo "   RPC_URL_HTTP: $(echo '${{ secrets.RPC_URL_HTTP }}' | sed 's/.*/***/g')"
-        echo "   RPC_URL_WS: $(echo '${{ secrets.RPC_URL_WS }}' | sed 's/.*/***/g' || echo 'Not set')"
-        echo "   PRIVATE_KEY: ***"
-        echo "   FLASHBOTS_SIGNING_KEY: $([ -n '${{ secrets.FLASHBOTS_SIGNING_KEY }}' ] && echo '***' || echo 'Not set')"
-        echo "   FLASHBOTS_RELAY_URL: $(echo '${{ secrets.FLASHBOTS_RELAY_URL }}' | sed 's/.*/***/g' || echo 'Not set')"
-        echo "   ETHERSCAN_API_KEY: ***"
-        echo "   BLOCKNATIVE_API_KEY: $([ -n '${{ secrets.BLOCKNATIVE_API_KEY }}' ] && echo '***' || echo 'Not set')"
-        echo ""
-        echo "⚙️  Configured Variables:"
-        echo "   SIMULATION_MODE: ${{ vars.SIMULATION_MODE }}"
-        echo "   ENABLE_FLASHBOTS: ${{ vars.ENABLE_FLASHBOTS }}"
-        echo "   ENABLE_FORK_SIM_PREFLIGHT: ${{ inputs.fork_preflight }}"
-        echo "   MAX_FLASHLOAN_AMOUNT_USD: ${{ vars.MAX_FLASHLOAN_AMOUNT_USD }}"
-        echo "   GLOBAL_MIN_PROFIT_USD: ${{ vars.GLOBAL_MIN_PROFIT_USD }}"
-        echo "   MAX_GAS_GWEI: ${{ vars.MAX_GAS_GWEI }}"
-        echo "   BUNDLE_GAS_LIMIT: ${{ vars.BUNDLE_GAS_LIMIT }}"
-        echo "   POOL_MAX_FAILURES: ${{ vars.POOL_MAX_FAILURES }}"
-        echo "   POOL_COOLDOWN_MS: ${{ vars.POOL_COOLDOWN_MS }}"
-        echo "   REQUIRE_RAW_TX_HEX: ${{ vars.REQUIRE_RAW_TX_HEX }}"
-        echo "   ONE_BUNDLE_PER_BLOCK: ${{ vars.ONE_BUNDLE_PER_BLOCK }}"
-        echo "   I_UNDERSTAND_LIVE_RISK: ${{ vars.I_UNDERSTAND_LIVE_RISK }}"
-        echo "   CONFIRM_MAINNET: ${{ vars.CONFIRM_MAINNET }}"
-        
-    - name: Compile TypeScript (if needed)
-      if: inputs.execution_mode == 'compiled'
-      timeout-minutes: 5
-      run: |
-        echo "🔨 Compiling TypeScript for execution_mode: compiled..."
-        
-        # First try npm run build, but check if it actually produces TypeScript output
-        echo "Attempting npm run build..."
-        npm run build
-        
-        # Check if TypeScript compilation was actually done
-        if [ -f "dist/src/bot/index.js" ]; then
-          echo "✅ npm run build completed successfully and produced TypeScript output"
-        else
-          echo "⚠️  npm run build completed but did not produce TypeScript output, attempting fallback to npx tsc..."
-          npx tsc -p tsconfig.json || {
-            echo "❌ TypeScript compilation failed with both npm run build and npx tsc"
-            exit 1
-          }
-          echo "✅ Fallback TypeScript compilation completed"
-        fi
-        
-        # Verify the expected output file exists
-        if [ -f "dist/src/bot/index.js" ]; then
-          echo "✅ Verified: dist/src/bot/index.js exists"
-          ls -la dist/src/bot/index.js
-        else
-          echo "❌ CRITICAL: dist/src/bot/index.js was not created by compilation"
-          echo "📂 Directory listing of dist/:"
-          find dist/ -name "*.js" | head -20 || echo "No JS files found in dist/"
-          echo "📂 Full dist structure:"
-          ls -la dist/ || echo "dist/ directory does not exist"
-          exit 1
-        fi
-        
-    - name: Prepare bot execution
-      run: |
-        echo "🔧 Bot Execution Configuration:"
-        echo "   Execution Mode: ${{ inputs.execution_mode }}"
-        echo "   Duration: ${{ inputs.duration_seconds }} seconds"
-        echo "   Log Level: ${{ inputs.log_level }}"
-        echo "   Bot Command: ${{ inputs.bot_command }}"
-        echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
-        echo "   Memory Guard: ${{ inputs.memory_guard_mb }}MB"
-        echo "   Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
-        echo "   GC Tracing: ${{ inputs.trace_gc }}"
-        echo ""
-        
-        # Build NODE_OPTIONS based on inputs
-        NODE_OPTIONS_BASE="--max-old-space-size=6144"
-        
-        if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
-          NODE_OPTIONS_BASE="${NODE_OPTIONS_BASE} --heapsnapshot-near-heap-limit=1"
-          echo "🧠 Heap snapshots enabled - will capture snapshot before OOM"
-        fi
-        
-        if [ "${{ inputs.trace_gc }}" = "true" ]; then
-          NODE_OPTIONS_BASE="${NODE_OPTIONS_BASE} --trace-gc"
-          echo "🧠 GC tracing enabled - verbose garbage collection logs"
-        fi
-        
-        echo "NODE_OPTIONS_FINAL=$NODE_OPTIONS_BASE" >> $GITHUB_ENV
-        echo "🧠 Final NODE_OPTIONS: $NODE_OPTIONS_BASE"
-        echo ""
-        
-        # Determine the command to run
-        if [ "${{ inputs.execution_mode }}" = "compiled" ]; then
-          # Verify the compiled output exists
-          if [ ! -f "dist/src/bot/index.js" ]; then
-            echo "❌ CRITICAL: dist/src/bot/index.js not found - compiled execution requires this file"
-            echo "📂 Current dist structure:"
-            find dist/ -name "*.js" | head -10 || echo "No JS files found in dist/"
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Parse advanced artifact input
+        id: parse-advanced
+        run: |
+          raw="${{ inputs.advanced_artifact }}"
+          # defaults
+          timeout="3"
+            compression="6"
+          # parse comma-separated key=value pairs
+          IFS=',' read -ra parts <<< "$raw"
+          for kv in "${parts[@]}"; do
+            k="${kv%%=*}"
+            v="${kv#*=}"
+            case "$k" in
+              timeout) timeout="$v" ;;
+              compression) compression="$v" ;;
+              *) echo "Ignoring unknown artifact setting: $k";;
+            esac
+          done
+          echo "ARTIFACT_TIMEOUT_MINUTES=$timeout" >> $GITHUB_ENV
+          echo "ARTIFACT_COMPRESSION_LEVEL=$compression" >> $GITHUB_ENV
+          echo "Parsed artifact settings -> timeout=$timeout compression=$compression"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Preflight checks - Required secrets
+        run: |
+          echo "🔍 Checking required secrets..."
+          if [ -z "${{ secrets.RPC_URL_HTTP }}" ]; then
+            echo "❌ CRITICAL: RPC_URL_HTTP secret is not set"
             exit 1
           fi
-          BOT_CMD="npm run start -- ${{ inputs.bot_command }}"
-          echo "🤖 Resolved Command: $BOT_CMD (compiled TypeScript)"
-          echo "📁 Verified Target: dist/src/bot/index.js"
-        else
-          BOT_CMD="npm run live -- ${{ inputs.bot_command }}"
-          echo "🤖 Resolved Command: $BOT_CMD (ts-node direct execution)"
-          echo "📁 Expected Target: src/bot/index.ts"
-        fi
-        
-        # Store the command for the next step
-        echo "BOT_CMD=$BOT_CMD" >> $GITHUB_ENV
-        
-    - name: Start live bot with memory guard and timeout
-      id: start-live-bot-with-timeout
-      timeout-minutes: ${{ inputs.job_timeout_minutes }}
-      run: |
-        echo "🚀 Starting live bot with memory guard..."
-        echo "📅 Start time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-        echo "⏰ Duration: ${{ inputs.duration_seconds }} seconds"
-        echo "🛡️  Memory guard limit: ${{ inputs.memory_guard_mb }}MB"
-        echo ""
-        
-        # Create output directory for logs
-        mkdir -p live-bot-logs
-        
-        # Display effective settings
-        echo "🤖 Command: $BOT_CMD"
-        echo "🧠 NODE_OPTIONS: $NODE_OPTIONS_FINAL"
-        echo "🛡️  Memory Guard: ${{ inputs.memory_guard_mb }}MB"
-        echo "📸 Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
-        echo "🗑️  GC Tracing: ${{ inputs.trace_gc }}"
-        echo ""
-        
-        # Make memory guard script executable
-        chmod +x .github/scripts/run-with-memory-guard.sh
-        
-        # Run the bot with memory guard and hard timeout enforcement
-        # The memory guard will monitor RSS and terminate before OOM
-        # timeout provides additional protection at the process level
-        timeout --foreground --kill-after=30 --signal=TERM ${{ inputs.duration_seconds }}s \
-          ./.github/scripts/run-with-memory-guard.sh ${{ inputs.memory_guard_mb }} \
-          $BOT_CMD \
-          2>&1 | tee live-bot-logs/bot-output.log || {
-          exit_code=$?
-          if [ $exit_code -eq 124 ]; then
-            echo ""
-            echo "⏰ Bot run completed - reached timeout limit of ${{ inputs.duration_seconds }} seconds"
-            echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            echo "✅ Process terminated gracefully by timeout"
-            exit 0
-          elif [ $exit_code -eq 137 ]; then
-            echo ""
-            echo "⏰ Bot run completed - forcefully killed after timeout grace period"
-            echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            echo "⚠️  Process required SIGKILL to terminate"
-            exit 0
-          elif [ $exit_code -eq 0 ]; then
-            echo ""
-            echo "🛡️  Bot run completed - terminated by memory guard"
-            echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            echo "✅ Memory guard prevented OOM crash"
-            exit 0
-          else
-            echo ""
-            echo "❌ Bot exited with error code $exit_code"
-            exit $exit_code
+          if [ -z "${{ secrets.PRIVATE_KEY }}" ]; then
+            echo "❌ CRITICAL: PRIVATE_KEY secret is not set"
+            exit 1
           fi
-        }
-        
-        echo ""
-        echo "📊 Log files created in live-bot-logs/"
-        ls -la live-bot-logs/
-        
-        # Check for heap snapshots
-        if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
+          if [ -z "${{ secrets.ETHERSCAN_API_KEY }}" ]; then
+            echo "❌ CRITICAL: ETHERSCAN_API_KEY secret is not set"
+            exit 1
+          fi
+          echo "✅ All required secrets are present"
+
+      - name: Preflight checks - Safety toggles
+        run: |
+          echo "🔒 Checking safety toggles..."
+          if [ "${{ vars.I_UNDERSTAND_LIVE_RISK }}" != "true" ]; then
+            echo "❌ SAFETY: I_UNDERSTAND_LIVE_RISK must be set to 'true' in repository variables"
+            exit 1
+          fi
+          if [ "${{ vars.CONFIRM_MAINNET }}" != "true" ]; then
+            echo "❌ SAFETY: CONFIRM_MAINNET must be set to 'true' in repository variables"
+            exit 1
+          fi
+          echo "✅ Safety toggles confirmed"
+
+      - name: Environment summary
+        run: |
+          echo "🔧 Environment Configuration Summary:"
+          echo "   Duration: ${{ inputs.duration_seconds }} seconds"
+          echo "   Mode: ${{ inputs.execution_mode }}"
+          echo "   Log Level: ${{ inputs.log_level }}"
+          echo "   Bot Command: ${{ inputs.bot_command }}"
+          echo "   Fork Preflight: ${{ inputs.fork_preflight }}"
+          echo "   Memory Guard: ${{ inputs.memory_guard_mb }}MB"
+          echo "   Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
+          echo "   GC Tracing: ${{ inputs.trace_gc }}"
+          echo "   Job Timeout: ${{ inputs.job_timeout_minutes }} minutes"
+          echo "   Artifact Timeout: $ARTIFACT_TIMEOUT_MINUTES minutes"
+          echo "   Artifact Compression: Level $ARTIFACT_COMPRESSION_LEVEL"
           echo ""
-          echo "📸 Checking for heap snapshots..."
-          if ls *.heapsnapshot 1> /dev/null 2>&1; then
-            echo "Found heap snapshots:"
-            ls -la *.heapsnapshot
-            mv *.heapsnapshot live-bot-logs/ 2>/dev/null || true
-          else
-            echo "No heap snapshots found (normal for short runs that don't hit heap limit)"
+          echo "🔐 Configured Secrets (masked):"
+          echo "   RPC_URL_HTTP: ***"
+          echo "   RPC_URL_WS: $( [ -n '${{ secrets.RPC_URL_WS }}' ] && echo '***' || echo 'Not set')"
+          echo "   PRIVATE_KEY: ***"
+          echo "   FLASHBOTS_SIGNING_KEY: $( [ -n '${{ secrets.FLASHBOTS_SIGNING_KEY }}' ] && echo '***' || echo 'Not set')"
+          echo "   FLASHBOTS_RELAY_URL: $( [ -n '${{ secrets.FLASHBOTS_RELAY_URL }}' ] && echo '***' || echo 'Not set')"
+          echo "   ETHERSCAN_API_KEY: ***"
+          echo "   BLOCKNATIVE_API_KEY: $( [ -n '${{ secrets.BLOCKNATIVE_API_KEY }}' ] && echo '***' || echo 'Not set')"
+
+      - name: Compile TypeScript (if needed)
+        if: inputs.execution_mode == 'compiled'
+        timeout-minutes: 5
+        run: |
+          echo "🔨 Compiling TypeScript..."
+          npm run build
+          if [ ! -f "dist/src/bot/index.js" ]; then
+            echo "Fallback tsc..."
+            npx tsc -p tsconfig.json
           fi
-        fi
-      env:
-        NODE_ENV: production
-        LOG_LEVEL: ${{ inputs.log_level }}
-        # Node.js memory configuration - composite based on inputs
-        NODE_OPTIONS: ${{ env.NODE_OPTIONS_FINAL }}
-        # Fork simulation preflight (controlled by input, defaults to false for CI safety)
-        ENABLE_FORK_SIM_PREFLIGHT: ${{ inputs.fork_preflight }}
-        # Secrets
-        RPC_URL_HTTP: ${{ secrets.RPC_URL_HTTP }}
-        RPC_URL_WS: ${{ secrets.RPC_URL_WS }}
-        PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-        FLASHBOTS_SIGNING_KEY: ${{ secrets.FLASHBOTS_SIGNING_KEY }}
-        FLASHBOTS_RELAY_URL: ${{ secrets.FLASHBOTS_RELAY_URL }}
-        ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
-        BLOCKNATIVE_API_KEY: ${{ secrets.BLOCKNATIVE_API_KEY }}
-        # Variables
-        SIMULATION_MODE: ${{ vars.SIMULATION_MODE }}
-        ENABLE_FLASHBOTS: ${{ vars.ENABLE_FLASHBOTS }}
-        MAX_FLASHLOAN_AMOUNT_USD: ${{ vars.MAX_FLASHLOAN_AMOUNT_USD }}
-        GLOBAL_MIN_PROFIT_USD: ${{ vars.GLOBAL_MIN_PROFIT_USD }}
-        MAX_GAS_GWEI: ${{ vars.MAX_GAS_GWEI }}
-        BUNDLE_GAS_LIMIT: ${{ vars.BUNDLE_GAS_LIMIT }}
-        POOL_MAX_FAILURES: ${{ vars.POOL_MAX_FAILURES }}
-        POOL_COOLDOWN_MS: ${{ vars.POOL_COOLDOWN_MS }}
-        REQUIRE_RAW_TX_HEX: ${{ vars.REQUIRE_RAW_TX_HEX }}
-        ONE_BUNDLE_PER_BLOCK: ${{ vars.ONE_BUNDLE_PER_BLOCK }}
-        I_UNDERSTAND_LIVE_RISK: ${{ vars.I_UNDERSTAND_LIVE_RISK }}
-        CONFIRM_MAINNET: ${{ vars.CONFIRM_MAINNET }}
-        
-    - name: Upload bot logs and artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      continue-on-error: true
-      timeout-minutes: ${{ inputs.artifact_timeout_minutes }}
-      with:
-        name: live-bot-logs-${{ github.run_number }}
-        path: |
-          live-bot-logs/bot-output.log
-          live-bot-logs/*.heapsnapshot
-        if-no-files-found: ignore
-        retention-days: 7
-        compression-level: ${{ inputs.artifact_compression_level }}
-        
-    - name: Run summary
-      if: always()
-      run: |
-        # Calculate effective duration
-        actual_duration=${{ inputs.duration_seconds }}
-        heap_snapshot_produced="false"
-        if [ "${{ inputs.enable_heap_snapshot }}" = "true" ] && ls live-bot-logs/*.heapsnapshot 1> /dev/null 2>&1; then
-          heap_snapshot_produced="true"
-        fi
-        
-        echo "## 🤖 Live Bot Test Results" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Test Type:** Limited-time live bot execution" >> $GITHUB_STEP_SUMMARY
-        echo "**Duration:** ${{ inputs.duration_seconds }} seconds" >> $GITHUB_STEP_SUMMARY
-        echo "**Mode:** ${{ inputs.execution_mode }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Bot Command:** ${{ inputs.bot_command }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Fork Preflight:** ${{ inputs.fork_preflight }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Memory Guard:** ${{ inputs.memory_guard_mb }}MB" >> $GITHUB_STEP_SUMMARY
-        echo "**Job Timeout:** ${{ inputs.job_timeout_minutes }} minutes" >> $GITHUB_STEP_SUMMARY
-        echo "**Artifact Timeout:** ${{ inputs.artifact_timeout_minutes }} minutes" >> $GITHUB_STEP_SUMMARY
-        echo "**Heap Snapshot Produced:** ${heap_snapshot_produced}" >> $GITHUB_STEP_SUMMARY
-        echo "**Heap Snapshots:** ${{ inputs.enable_heap_snapshot }}" >> $GITHUB_STEP_SUMMARY
-        echo "**GC Tracing:** ${{ inputs.trace_gc }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Node.js Heap:** 6GB (enhanced for memory-intensive operations)" >> $GITHUB_STEP_SUMMARY
-        echo "**Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Check if the bot execution step succeeded (exit codes 0, 124, 137 are all considered successful completions)
-        if [ "${{ steps.start-live-bot-with-timeout.outcome }}" = "success" ]; then
-          echo "**Result:** ✅ COMPLETED" >> $GITHUB_STEP_SUMMARY
+          if [ ! -f "dist/src/bot/index.js" ]; then
+            echo "❌ dist/src/bot/index.js not produced"
+            exit 1
+          fi
+
+      - name: Prepare bot execution
+        run: |
+          NODE_OPTIONS_BASE="--max-old-space-size=6144"
+          if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
+            NODE_OPTIONS_BASE="$NODE_OPTIONS_BASE --heapsnapshot-near-heap-limit=1"
+          fi
+            if [ "${{ inputs.trace_gc }}" = "true" ]; then
+            NODE_OPTIONS_BASE="$NODE_OPTIONS_BASE --trace-gc"
+          fi
+          echo "NODE_OPTIONS_FINAL=$NODE_OPTIONS_BASE" >> $GITHUB_ENV
+          if [ "${{ inputs.execution_mode }}" = "compiled" ]; then
+            BOT_CMD="npm run start -- ${{ inputs.bot_command }}"
+          else
+            BOT_CMD="npm run live -- ${{ inputs.bot_command }}"
+          fi
+          echo "BOT_CMD=$BOT_CMD" >> $GITHUB_ENV
+          echo "Prepared command: $BOT_CMD"
+
+      - name: Start live bot with memory guard and timeout
+        id: start-live-bot-with-timeout
+        timeout-minutes: ${{ inputs.job_timeout_minutes }}
+        run: |
+          echo "🚀 Starting bot for ${{ inputs.duration_seconds }} seconds"
+          mkdir -p live-bot-logs
+          chmod +x .github/scripts/run-with-memory-guard.sh
+          timeout --foreground --kill-after=30 --signal=TERM ${{ inputs.duration_seconds }}s \
+            ./.github/scripts/run-with-memory-guard.sh ${{ inputs.memory_guard_mb }} \
+            $BOT_CMD 2>&1 | tee live-bot-logs/bot-output.log || {
+              ec=$?
+              if [ $ec -eq 124 ]; then
+                echo "⏰ Reached run duration limit"
+                exit 0
+              elif [ $ec -eq 137 ]; then
+                echo "⏰ Killed after grace period"
+                exit 0
+              elif [ $ec -eq 0 ]; then
+                echo "Exited cleanly"
+                exit 0
+              else
+                echo "❌ Bot exited with code $ec"
+                exit $ec
+              fi
+            }
+          if [ "${{ inputs.enable_heap_snapshot }}" = "true" ]; then
+            if ls *.heapsnapshot 1>/dev/null 2>&1; then
+              mv *.heapsnapshot live-bot-logs/ || true
+            fi
+          fi
+        env:
+          NODE_ENV: production
+          LOG_LEVEL: ${{ inputs.log_level }}
+          NODE_OPTIONS: ${{ env.NODE_OPTIONS_FINAL }}
+          ENABLE_FORK_SIM_PREFLIGHT: ${{ inputs.fork_preflight }}
+          RPC_URL_HTTP: ${{ secrets.RPC_URL_HTTP }}
+          RPC_URL_WS: ${{ secrets.RPC_URL_WS }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          FLASHBOTS_SIGNING_KEY: ${{ secrets.FLASHBOTS_SIGNING_KEY }}
+          FLASHBOTS_RELAY_URL: ${{ secrets.FLASHBOTS_RELAY_URL }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          BLOCKNATIVE_API_KEY: ${{ secrets.BLOCKNATIVE_API_KEY }}
+          SIMULATION_MODE: ${{ vars.SIMULATION_MODE }}
+          ENABLE_FLASHBOTS: ${{ vars.ENABLE_FLASHBOTS }}
+          MAX_FLASHLOAN_AMOUNT_USD: ${{ vars.MAX_FLASHLOAN_AMOUNT_USD }}
+          GLOBAL_MIN_PROFIT_USD: ${{ vars.GLOBAL_MIN_PROFIT_USD }}
+          MAX_GAS_GWEI: ${{ vars.MAX_GAS_GWEI }}
+          BUNDLE_GAS_LIMIT: ${{ vars.BUNDLE_GAS_LIMIT }}
+          POOL_MAX_FAILURES: ${{ vars.POOL_MAX_FAILURES }}
+          POOL_COOLDOWN_MS: ${{ vars.POOL_COOLDOWN_MS }}
+          REQUIRE_RAW_TX_HEX: ${{ vars.REQUIRE_RAW_TX_HEX }}
+          ONE_BUNDLE_PER_BLOCK: ${{ vars.ONE_BUNDLE_PER_BLOCK }}
+          I_UNDERSTAND_LIVE_RISK: ${{ vars.I_UNDERSTAND_LIVE_RISK }}
+          CONFIRM_MAINNET: ${{ vars.CONFIRM_MAINNET }}
+
+      - name: Upload bot logs and artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        timeout-minutes: ${{ env.ARTIFACT_TIMEOUT_MINUTES }}
+        with:
+          name: live-bot-logs-${{ github.run_number }}
+          path: |
+            live-bot-logs/bot-output.log
+            live-bot-logs/*.heapsnapshot
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: ${{ env.ARTIFACT_COMPRESSION_LEVEL }}
+
+      - name: Run summary
+        if: always()
+        run: |
+          heap_snapshot_produced="false"
+          if [ "${{ inputs.enable_heap_snapshot }}" = "true" ] && ls live-bot-logs/*.heapsnapshot 1>/dev/null 2>&1; then
+            heap_snapshot_produced="true"
+          fi
+          echo "## 🤖 Live Bot Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "**Duration:** ${{ inputs.duration_seconds }}s" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** ${{ inputs.execution_mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Command:** ${{ inputs.bot_command }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Fork Preflight:** ${{ inputs.fork_preflight }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Memory Guard:** ${{ inputs.memory_guard_mb }}MB" >> $GITHUB_STEP_SUMMARY
+          echo "**Job Timeout:** ${{ inputs.job_timeout_minutes }}m" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact Timeout:** $ARTIFACT_TIMEOUT_MINUTES m" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact Compression:** $ARTIFACT_COMPRESSION_LEVEL" >> $GITHUB_STEP_SUMMARY
+          echo "**Heap Snapshot Produced:** $heap_snapshot_produced" >> $GITHUB_STEP_SUMMARY
+          echo "**GC Tracing:** ${{ inputs.trace_gc }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.start-live-bot-with-timeout.outcome }}" = "success" ]; then
+            echo "**Result:** ✅ COMPLETED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Result:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Run Summary:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Bot started successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Ran with memory guard protection" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Completed within limits (timeout or memory guard)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Logs and artifacts captured and uploaded" >> $GITHUB_STEP_SUMMARY
+          echo "**Log Artifact:** live-bot-logs-${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Download the log artifacts to analyze bot behavior" >> $GITHUB_STEP_SUMMARY
-          echo "2. Check for any opportunities detected or trades executed" >> $GITHUB_STEP_SUMMARY
-          echo "3. Monitor memory usage patterns in the logs" >> $GITHUB_STEP_SUMMARY
-          echo "4. Review heap snapshots if OOM conditions were reached" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**Result:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Troubleshooting:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Check the log artifacts for error details" >> $GITHUB_STEP_SUMMARY
-          echo "2. Verify all secrets and variables are correctly configured" >> $GITHUB_STEP_SUMMARY
-          echo "3. Ensure sufficient ETH balance for gas costs" >> $GITHUB_STEP_SUMMARY
-          echo "4. Review memory usage patterns and heap snapshots if available" >> $GITHUB_STEP_SUMMARY
-          echo "5. Consider adjusting memory guard limit if hitting memory constraints" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Log Artifact:** \`live-bot-logs-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### ⚠️ Safety Notice:" >> $GITHUB_STEP_SUMMARY
-        echo "This workflow runs the bot with real funds and smart contracts." >> $GITHUB_STEP_SUMMARY
-        echo "Always monitor executions and ensure adequate safety limits are configured." >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🔧 Enhanced Features:" >> $GITHUB_STEP_SUMMARY
-        echo "- **Memory Guard:** Monitors RSS usage and prevents OOM crashes" >> $GITHUB_STEP_SUMMARY
-        echo "- **Hard Timeout Enforcement:** Uses GNU timeout with SIGTERM/SIGKILL for reliable termination" >> $GITHUB_STEP_SUMMARY
-        echo "- **Heap Snapshots:** Captures heap snapshots near memory limits for debugging" >> $GITHUB_STEP_SUMMARY
-        echo "- **GC Tracing:** Optional verbose garbage collection logging" >> $GITHUB_STEP_SUMMARY
-        echo "- **Enhanced Memory Management:** 6GB Node.js heap with configurable options" >> $GITHUB_STEP_SUMMARY
-        echo "- **Reliable Logging:** Logs and artifacts always uploaded regardless of execution outcome" >> $GITHUB_STEP_SUMMARY
+          echo "### Safety Notice" >> $GITHUB_STEP_SUMMARY
+          echo "Real funds risk; ensure variables and limits are correct." >> $GITHUB_STEP_SUMMARY
