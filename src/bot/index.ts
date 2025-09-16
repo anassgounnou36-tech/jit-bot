@@ -754,23 +754,34 @@ export class JitBot {
 // CLI interface
 if (require.main === module) {
   // Handle command line arguments first, before instantiating the bot
-  const command = process.argv[2];
+  let command = process.argv[2];
+  
+  // Default to 'start' if no command provided and log a warning
+  if (!command) {
+    console.warn('No command specified, defaulting to "start". Use "start" or "status" explicitly.');
+    command = 'start';
+  }
 
   switch (command) {
-    case 'start':
+    case 'start': {
+      // Braces required to satisfy ESLint no-case-declarations rule
       const botStart = new JitBot();
       botStart.start().catch(error => {
         console.error('Failed to start bot:', error);
         process.exit(1);
       });
       break;
+    }
 
-    case 'status':
+    case 'status': {
+      // Braces required to satisfy ESLint no-case-declarations rule
       const botStatus = new JitBot();
       console.log(JSON.stringify(botStatus.getStatus(), null, 2));
       break;
+    }
 
-    default:
+    default: {
+      // Braces added for consistency, though not required for this case
       console.log('Usage: ts-node src/bot/index.ts [start|status]');
       console.log('');
       console.log('Commands:');
@@ -786,5 +797,6 @@ if (require.main === module) {
       console.log('');
       console.log('Safety: Live execution is disabled by default. Set appropriate flags to enable.');
       process.exit(1);
+    }
   }
 }
