@@ -75,8 +75,9 @@ export interface JitBotConfig {
   flashbotsRelayUrl: string;
   
   // Flashloan configuration
-  flashloanPriority: 'balancer-first' | 'aave-first';
+  flashloanProviderPriority: string[];
   allowReconstructRawTx: boolean;
+  maxBundlesPerBlock: number;
   
   // Contract addresses
   jitContractAddress?: string;
@@ -234,8 +235,12 @@ export function loadConfig(): JitBotConfig {
   }
   
   // Flashloan configuration
-  const flashloanPriority = (process.env.FLASHLOAN_PRIORITY || 'balancer-first') as 'balancer-first' | 'aave-first';
+  const flashloanProviderPriority = process.env.FLASHLOAN_PROVIDER_PRIORITY ? 
+    process.env.FLASHLOAN_PROVIDER_PRIORITY.split(',').map(p => p.trim()) :
+    (process.env.FLASHLOAN_PRIORITY === 'aave-first' ? ['aave', 'balancer'] : ['balancer', 'aave']);
+    
   const allowReconstructRawTx = process.env.ALLOW_RECONSTRUCT_RAW_TX === 'true';
+  const maxBundlesPerBlock = parseInt(process.env.MAX_BUNDLES_PER_BLOCK || '1');
   
   // Contract configuration
   const jitContractAddress = process.env.JIT_CONTRACT_ADDRESS;
@@ -296,8 +301,9 @@ export function loadConfig(): JitBotConfig {
     privateKey,
     flashbotsSigningKey,
     flashbotsRelayUrl,
-    flashloanPriority,
+    flashloanProviderPriority,
     allowReconstructRawTx,
+    maxBundlesPerBlock,
     jitContractAddress,
     chainConfig,
     flashLoanProviders: jsonConfig.flashLoanProviders || {},
@@ -336,6 +342,41 @@ function validateExecutionSafety(config: JitBotConfig): void {
   }
   
   console.log('✅ Fork simulation enabled - Full validation before any execution');
+}
+
+/**
+ * Validate wallet balance for live execution (async)
+ */
+export async function validateWalletBalance(config: JitBotConfig): Promise<void> {
+  if (config.dryRun) {
+    return; // Skip balance check for dry run
+  }
+  
+  const provider = new ethers.providers.JsonRpcProvider(config.rpcUrlHttp);
+  const wallet = new ethers.Wallet(config.privateKey, provider);
+  
+  try {
+    const balance = await wallet.getBalance();
+    const balanceEth = parseFloat(ethers.utils.formatEther(balance));
+    
+    console.log(`💰 Wallet balance: ${balanceEth.toFixed(6)} ETH`);
+    
+    if (balanceEth < config.minRequiredEth) {
+      throw new Error(
+        `Insufficient balance for live execution. ` +
+        `Required: ${config.minRequiredEth} ETH, Available: ${balanceEth.toFixed(6)} ETH. ` +
+        `Please fund wallet ${wallet.address} before enabling live execution.`
+      );
+    }
+    
+    console.log(`✅ Wallet balance sufficient for live execution (${balanceEth.toFixed(6)} >= ${config.minRequiredEth} ETH)`);
+  } catch (error: any) {
+    if (error.message.includes('Insufficient balance')) {
+      throw error;
+    }
+    console.warn(`⚠️  Could not verify wallet balance: ${error.message}`);
+    console.warn('⚠️  Proceeding with live execution anyway - manual balance verification required');
+  }
 }
 
 /**

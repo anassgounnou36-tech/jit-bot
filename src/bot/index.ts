@@ -159,6 +159,12 @@ export class JitBot {
       // Validate configuration
       await this.validateConfiguration();
 
+      // Validate wallet balance for live execution
+      if (!this.config.dryRun) {
+        const { validateWalletBalance } = await import('../config');
+        await validateWalletBalance(this.config);
+      }
+
       // Start mempool monitoring - always on
       await this.startMempoolMonitoring();
 

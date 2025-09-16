@@ -298,6 +298,41 @@ const FILE_CHECKS = [
     name: 'compare-sims-script',
     path: 'scripts/compare-fastSim-vs-forkSim.js',
     description: 'Simulation comparison script'
+  },
+  {
+    name: 'sample-pending-candidate',
+    path: 'reports/sample-pending-candidate.json',
+    description: 'Sample pending candidate file'
+  },
+  {
+    name: 'eth-callbundle-simulation',
+    path: 'reports/eth_callBundle-simulation-success.json', 
+    description: 'eth_callBundle simulation success file'
+  },
+  {
+    name: 'fork-e2e-summary-1',
+    path: 'reports/fork-e2e-summary-1.json',
+    description: 'Fork E2E summary 1'
+  },
+  {
+    name: 'fork-e2e-summary-2',
+    path: 'reports/fork-e2e-summary-2.json',
+    description: 'Fork E2E summary 2'
+  },
+  {
+    name: 'fork-e2e-summary-3',
+    path: 'reports/fork-e2e-summary-3.json',
+    description: 'Fork E2E summary 3'
+  },
+  {
+    name: 'slither-summary',
+    path: 'slither-summary.json',
+    description: 'Slither summary file'
+  },
+  {
+    name: 'verifier-output',
+    path: 'reports/verifier-output.json',
+    description: 'Verifier output file'
   }
 ];
 
@@ -320,14 +355,39 @@ const CONFIG_CHECKS = [
     description: 'PRIVATE_KEY !== FLASHBOTS_SIGNING_KEY'
   },
   {
-    name: 'simulation-mode',
-    check: () => process.env.SIMULATION_MODE === 'true',
-    description: 'SIMULATION_MODE=true for testing'
+    name: 'dry-run-default',
+    check: () => process.env.DRY_RUN !== 'false',
+    description: 'DRY_RUN=true for safety (default)'
   },
   {
     name: 'risk-acknowledgment',
     check: () => process.env.I_UNDERSTAND_LIVE_RISK !== 'true',
     description: 'I_UNDERSTAND_LIVE_RISK not set (safe for testing)'
+  },
+  {
+    name: 'min-balance-configured',
+    check: () => !!process.env.MIN_REQUIRED_ETH,
+    description: 'MIN_REQUIRED_ETH configured'
+  },
+  {
+    name: 'rpc-urls-set',
+    check: () => !!process.env.RPC_URL_HTTP && !!process.env.RPC_URL_WS,
+    description: 'RPC_URL_HTTP and RPC_URL_WS configured'
+  },
+  {
+    name: 'global-profit-threshold',
+    check: () => !!process.env.GLOBAL_MIN_PROFIT_USD,
+    description: 'GLOBAL_MIN_PROFIT_USD configured'
+  },
+  {
+    name: 'flashloan-priority',
+    check: () => !!process.env.FLASHLOAN_PROVIDER_PRIORITY || process.env.FLASHLOAN_PRIORITY,
+    description: 'Flashloan provider priority configured'
+  },
+  {
+    name: 'metrics-port',
+    check: () => !!process.env.PROMETHEUS_PORT,
+    description: 'PROMETHEUS_PORT configured'
   }
 ];
 

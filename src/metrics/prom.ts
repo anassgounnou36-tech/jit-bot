@@ -288,11 +288,11 @@ export class PrometheusMetrics {
     this.setupRoutes();
     this.setupDefaultMetrics();
     
-    // Warn about deprecated METRICS_PORT
-    if (botConfig.metricsPort && !config?.port) {
+    // Warn about deprecated METRICS_PORT - now handled in config.ts
+    if (botConfig._deprecated?.metricsPort && !config?.port) {
       this.logger.warn({
         msg: 'METRICS_PORT is deprecated, please use PROMETHEUS_PORT instead',
-        metricsPort: botConfig.metricsPort,
+        metricsPort: botConfig._deprecated.metricsPort,
         prometheusPort: botConfig.prometheusPort
       });
     }
@@ -510,12 +510,12 @@ export class PrometheusMetrics {
     mempoolTxsRawMissingTotal.inc({ reason });
   }
 
-  public incrementMempoolSwapsDecoded(method: string): void {
-    mempoolSwapsDecodedTotal.inc({ method });
+  public incrementMempoolSwapsDecoded(): void {
+    mempoolSwapsDecodedTotal.inc();
   }
 
-  public incrementMempoolSwapsMatched(pool: string): void {
-    mempoolSwapsMatchedTotal.inc({ pool });
+  public incrementMempoolSwapsMatched(): void {
+    mempoolSwapsMatchedTotal.inc();
   }
 
   public incrementMempoolSwapsRejected(reason: string): void {
