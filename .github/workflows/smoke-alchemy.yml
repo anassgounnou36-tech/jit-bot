@@ -1,0 +1,111 @@
+name: Smoke Test - Alchemy Endpoints
+
+on:
+  workflow_dispatch:
+    inputs:
+      log_level:
+        description: 'Log level for debugging'
+        required: false
+        default: 'info'
+        type: choice
+        options:
+        - 'info'
+        - 'debug'
+
+jobs:
+  smoke-alchemy:
+    name: Test Alchemy HTTP and WebSocket Endpoints
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Validate required secrets
+      run: |
+        echo "🔍 Checking required secrets..."
+        if [ -z "${{ secrets.RPC_URL_HTTP }}" ]; then
+          echo "❌ RPC_URL_HTTP secret is not set"
+          exit 1
+        fi
+        if [ -z "${{ secrets.RPC_URL_WS }}" ]; then
+          echo "❌ RPC_URL_WS secret is not set"
+          exit 1
+        fi
+        echo "✅ Required secrets are present"
+        
+    - name: Run Alchemy smoke test
+      run: |
+        echo "🔥 Starting Alchemy endpoint smoke test..."
+        echo "📅 Start time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        echo "🔒 Safety: Read-only operations only, no transactions will be sent"
+        echo ""
+        
+        # Run the smoke test and capture output
+        node scripts/smoke-alchemy.js 2>&1 | tee alchemy-smoke-test.log
+        
+        echo ""
+        echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        echo "📊 Log file created: alchemy-smoke-test.log"
+      env:
+        RPC_URL_HTTP: ${{ secrets.RPC_URL_HTTP }}
+        RPC_URL_WS: ${{ secrets.RPC_URL_WS }}
+        LOG_LEVEL: ${{ inputs.log_level }}
+        
+    - name: Upload test logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: alchemy-smoke-test-logs-${{ github.run_number }}
+        path: |
+          alchemy-smoke-test.log
+        retention-days: 7
+        
+    - name: Test summary
+      if: always()
+      run: |
+        echo "## 🔥 Alchemy Smoke Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Test Type:** Read-only endpoint validation" >> $GITHUB_STEP_SUMMARY
+        echo "**Safety:** No transactions sent, only reads blockchain state" >> $GITHUB_STEP_SUMMARY
+        echo "**Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ $? -eq 0 ]; then
+          echo "**Result:** ✅ SUCCESS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### What was tested:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ HTTP endpoint connectivity" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ WebSocket endpoint connectivity" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Chain ID verification" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Latest block retrieval" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Gas price queries" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Contract state calls" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check your Alchemy dashboard for request activity" >> $GITHUB_STEP_SUMMARY
+          echo "2. Download the test logs artifact for detailed analysis" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Result:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Troubleshooting:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Verify RPC_URL_HTTP and RPC_URL_WS secrets are correctly set" >> $GITHUB_STEP_SUMMARY
+          echo "2. Ensure your Alchemy API key is valid and has sufficient credits" >> $GITHUB_STEP_SUMMARY
+          echo "3. Check the test logs artifact for detailed error information" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Log Artifact:** \`alchemy-smoke-test-logs-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY

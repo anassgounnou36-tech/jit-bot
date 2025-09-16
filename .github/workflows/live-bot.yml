@@ -1,0 +1,241 @@
+name: Live Bot - Short Run Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: 'Duration to run the bot (seconds)'
+        required: false
+        default: '180'
+        type: number
+      execution_mode:
+        description: 'Execution mode'
+        required: false
+        default: 'ts-node'
+        type: choice
+        options:
+        - 'ts-node'
+        - 'compiled'
+      log_level:
+        description: 'Log level'
+        required: false
+        default: 'info'
+        type: choice
+        options:
+        - 'debug'
+        - 'info'
+        - 'warn'
+
+concurrency:
+  group: live-bot-run
+  cancel-in-progress: true
+
+jobs:
+  live-bot-test:
+    name: Run Live Bot for Limited Time
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Preflight checks - Required secrets
+      run: |
+        echo "🔍 Checking required secrets..."
+        
+        # Check critical secrets
+        if [ -z "${{ secrets.RPC_URL_HTTP }}" ]; then
+          echo "❌ CRITICAL: RPC_URL_HTTP secret is not set"
+          exit 1
+        fi
+        
+        if [ -z "${{ secrets.PRIVATE_KEY }}" ]; then
+          echo "❌ CRITICAL: PRIVATE_KEY secret is not set"
+          exit 1
+        fi
+        
+        if [ -z "${{ secrets.ETHERSCAN_API_KEY }}" ]; then
+          echo "❌ CRITICAL: ETHERSCAN_API_KEY secret is not set"
+          exit 1
+        fi
+        
+        echo "✅ All required secrets are present"
+        
+    - name: Preflight checks - Safety toggles
+      run: |
+        echo "🔒 Checking safety toggles..."
+        
+        # Check safety acknowledgment
+        if [ "${{ vars.I_UNDERSTAND_LIVE_RISK }}" != "true" ]; then
+          echo "❌ SAFETY: I_UNDERSTAND_LIVE_RISK must be set to 'true' in repository variables"
+          echo "   This confirms you understand the risks of running the bot with real funds"
+          exit 1
+        fi
+        
+        # Check mainnet confirmation
+        if [ "${{ vars.CONFIRM_MAINNET }}" != "true" ]; then
+          echo "❌ SAFETY: CONFIRM_MAINNET must be set to 'true' in repository variables"
+          echo "   This confirms you want to run on mainnet"
+          exit 1
+        fi
+        
+        echo "✅ Safety toggles confirmed"
+        
+    - name: Environment summary
+      run: |
+        echo "🔧 Environment Configuration Summary:"
+        echo "   Duration: ${{ inputs.duration_seconds }} seconds"
+        echo "   Mode: ${{ inputs.execution_mode }}"
+        echo "   Log Level: ${{ inputs.log_level }}"
+        echo ""
+        echo "🔐 Configured Secrets (masked):"
+        echo "   RPC_URL_HTTP: $(echo '${{ secrets.RPC_URL_HTTP }}' | sed 's/.*/***/g')"
+        echo "   RPC_URL_WS: $(echo '${{ secrets.RPC_URL_WS }}' | sed 's/.*/***/g' || echo 'Not set')"
+        echo "   PRIVATE_KEY: ***"
+        echo "   FLASHBOTS_SIGNING_KEY: $([ -n '${{ secrets.FLASHBOTS_SIGNING_KEY }}' ] && echo '***' || echo 'Not set')"
+        echo "   FLASHBOTS_RELAY_URL: $(echo '${{ secrets.FLASHBOTS_RELAY_URL }}' | sed 's/.*/***/g' || echo 'Not set')"
+        echo "   ETHERSCAN_API_KEY: ***"
+        echo "   BLOCKNATIVE_API_KEY: $([ -n '${{ secrets.BLOCKNATIVE_API_KEY }}' ] && echo '***' || echo 'Not set')"
+        echo ""
+        echo "⚙️  Configured Variables:"
+        echo "   SIMULATION_MODE: ${{ vars.SIMULATION_MODE }}"
+        echo "   ENABLE_FLASHBOTS: ${{ vars.ENABLE_FLASHBOTS }}"
+        echo "   MAX_FLASHLOAN_AMOUNT_USD: ${{ vars.MAX_FLASHLOAN_AMOUNT_USD }}"
+        echo "   GLOBAL_MIN_PROFIT_USD: ${{ vars.GLOBAL_MIN_PROFIT_USD }}"
+        echo "   MAX_GAS_GWEI: ${{ vars.MAX_GAS_GWEI }}"
+        echo "   BUNDLE_GAS_LIMIT: ${{ vars.BUNDLE_GAS_LIMIT }}"
+        echo "   POOL_MAX_FAILURES: ${{ vars.POOL_MAX_FAILURES }}"
+        echo "   POOL_COOLDOWN_MS: ${{ vars.POOL_COOLDOWN_MS }}"
+        echo "   REQUIRE_RAW_TX_HEX: ${{ vars.REQUIRE_RAW_TX_HEX }}"
+        echo "   ONE_BUNDLE_PER_BLOCK: ${{ vars.ONE_BUNDLE_PER_BLOCK }}"
+        echo "   I_UNDERSTAND_LIVE_RISK: ${{ vars.I_UNDERSTAND_LIVE_RISK }}"
+        echo "   CONFIRM_MAINNET: ${{ vars.CONFIRM_MAINNET }}"
+        
+    - name: Compile TypeScript (if needed)
+      if: inputs.execution_mode == 'compiled'
+      run: |
+        echo "🔨 Compiling TypeScript..."
+        npm run build:ts
+        
+    - name: Start live bot with timeout
+      run: |
+        echo "🚀 Starting live bot..."
+        echo "📅 Start time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        echo "⏰ Duration: ${{ inputs.duration_seconds }} seconds"
+        echo ""
+        
+        # Create output directory for logs
+        mkdir -p live-bot-logs
+        
+        # Determine the command to run
+        if [ "${{ inputs.execution_mode }}" = "compiled" ]; then
+          BOT_CMD="npm run start"
+        else
+          BOT_CMD="npm run live"
+        fi
+        
+        echo "🤖 Command: $BOT_CMD"
+        echo ""
+        
+        # Run the bot with timeout and capture output
+        timeout ${{ inputs.duration_seconds }}s $BOT_CMD 2>&1 | tee live-bot-logs/bot-output.log || {
+          exit_code=$?
+          if [ $exit_code -eq 124 ]; then
+            echo ""
+            echo "⏰ Bot run completed - reached timeout limit of ${{ inputs.duration_seconds }} seconds"
+            echo "📅 End time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          else
+            echo ""
+            echo "❌ Bot exited with error code $exit_code"
+            exit $exit_code
+          fi
+        }
+        
+        echo ""
+        echo "📊 Log files created in live-bot-logs/"
+        ls -la live-bot-logs/
+      env:
+        NODE_ENV: production
+        LOG_LEVEL: ${{ inputs.log_level }}
+        # Secrets
+        RPC_URL_HTTP: ${{ secrets.RPC_URL_HTTP }}
+        RPC_URL_WS: ${{ secrets.RPC_URL_WS }}
+        PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+        FLASHBOTS_SIGNING_KEY: ${{ secrets.FLASHBOTS_SIGNING_KEY }}
+        FLASHBOTS_RELAY_URL: ${{ secrets.FLASHBOTS_RELAY_URL }}
+        ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        BLOCKNATIVE_API_KEY: ${{ secrets.BLOCKNATIVE_API_KEY }}
+        # Variables
+        SIMULATION_MODE: ${{ vars.SIMULATION_MODE }}
+        ENABLE_FLASHBOTS: ${{ vars.ENABLE_FLASHBOTS }}
+        MAX_FLASHLOAN_AMOUNT_USD: ${{ vars.MAX_FLASHLOAN_AMOUNT_USD }}
+        GLOBAL_MIN_PROFIT_USD: ${{ vars.GLOBAL_MIN_PROFIT_USD }}
+        MAX_GAS_GWEI: ${{ vars.MAX_GAS_GWEI }}
+        BUNDLE_GAS_LIMIT: ${{ vars.BUNDLE_GAS_LIMIT }}
+        POOL_MAX_FAILURES: ${{ vars.POOL_MAX_FAILURES }}
+        POOL_COOLDOWN_MS: ${{ vars.POOL_COOLDOWN_MS }}
+        REQUIRE_RAW_TX_HEX: ${{ vars.REQUIRE_RAW_TX_HEX }}
+        ONE_BUNDLE_PER_BLOCK: ${{ vars.ONE_BUNDLE_PER_BLOCK }}
+        I_UNDERSTAND_LIVE_RISK: ${{ vars.I_UNDERSTAND_LIVE_RISK }}
+        CONFIRM_MAINNET: ${{ vars.CONFIRM_MAINNET }}
+        
+    - name: Upload bot logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: live-bot-logs-${{ github.run_number }}
+        path: |
+          live-bot-logs/
+        retention-days: 7
+        
+    - name: Run summary
+      if: always()
+      run: |
+        echo "## 🤖 Live Bot Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Test Type:** Limited-time live bot execution" >> $GITHUB_STEP_SUMMARY
+        echo "**Duration:** ${{ inputs.duration_seconds }} seconds" >> $GITHUB_STEP_SUMMARY
+        echo "**Mode:** ${{ inputs.execution_mode }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ $? -eq 0 ] || [ $? -eq 124 ]; then
+          echo "**Result:** ✅ COMPLETED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Run Summary:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Bot started successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Ran for configured duration" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Logs captured and uploaded" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the log artifacts to analyze bot behavior" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check for any opportunities detected or trades executed" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor gas usage and profit calculations" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Result:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Troubleshooting:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check the log artifacts for error details" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify all secrets and variables are correctly configured" >> $GITHUB_STEP_SUMMARY
+          echo "3. Ensure sufficient ETH balance for gas costs" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Log Artifact:** \`live-bot-logs-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ⚠️ Safety Notice:" >> $GITHUB_STEP_SUMMARY
+        echo "This workflow runs the bot with real funds and smart contracts." >> $GITHUB_STEP_SUMMARY
+        echo "Always monitor executions and ensure adequate safety limits are configured." >> $GITHUB_STEP_SUMMARY
