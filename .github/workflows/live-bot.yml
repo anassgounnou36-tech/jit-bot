@@ -62,21 +62,6 @@ on:
         options:
         - 'true'
         - 'false'
-      job_timeout_minutes:
-        description: 'Job timeout in minutes (total workflow timeout)'
-        required: false
-        default: '15'
-        type: number
-      artifact_timeout_minutes:
-        description: 'Artifact upload timeout in minutes'
-        required: false
-        default: '3'
-        type: number
-      artifact_compression_level:
-        description: 'Artifact compression level (0-9, higher = more compression)'
-        required: false
-        default: '6'
-        type: number
 
 concurrency:
   group: live-bot-run
@@ -86,7 +71,6 @@ jobs:
   live-bot-test:
     name: Run Live Bot for Limited Time
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     
     permissions:
       contents: read
@@ -159,9 +143,6 @@ jobs:
         echo "   Heap Snapshots: ${{ inputs.enable_heap_snapshot }}"
         echo "   GC Tracing: ${{ inputs.trace_gc }}"
         echo "   Node.js Heap: 6GB (enhanced for memory-intensive operations)"
-        echo "   Job Timeout: ${{ inputs.job_timeout_minutes }} minutes"
-        echo "   Artifact Timeout: ${{ inputs.artifact_timeout_minutes }} minutes"
-        echo "   Artifact Compression: Level ${{ inputs.artifact_compression_level }}"
         echo ""
         echo "🔐 Configured Secrets (masked):"
         echo "   RPC_URL_HTTP: $(echo '${{ secrets.RPC_URL_HTTP }}' | sed 's/.*/***/g')"
@@ -189,7 +170,6 @@ jobs:
         
     - name: Compile TypeScript (if needed)
       if: inputs.execution_mode == 'compiled'
-      timeout-minutes: 5
       run: |
         echo "🔨 Compiling TypeScript for execution_mode: compiled..."
         
@@ -275,7 +255,6 @@ jobs:
         
     - name: Start live bot with memory guard and timeout
       id: start-live-bot-with-timeout
-      timeout-minutes: ${{ inputs.job_timeout_minutes }}
       run: |
         echo "🚀 Starting live bot with memory guard..."
         echo "📅 Start time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -378,27 +357,15 @@ jobs:
     - name: Upload bot logs and artifacts
       uses: actions/upload-artifact@v4
       if: always()
-      continue-on-error: true
-      timeout-minutes: ${{ inputs.artifact_timeout_minutes }}
       with:
         name: live-bot-logs-${{ github.run_number }}
         path: |
-          live-bot-logs/bot-output.log
-          live-bot-logs/*.heapsnapshot
-        if-no-files-found: ignore
-        retention-days: 7
-        compression-level: ${{ inputs.artifact_compression_level }}
+          live-bot-logs/
+        retention-days: 14
         
     - name: Run summary
       if: always()
       run: |
-        # Calculate effective duration
-        actual_duration=${{ inputs.duration_seconds }}
-        heap_snapshot_produced="false"
-        if [ "${{ inputs.enable_heap_snapshot }}" = "true" ] && ls live-bot-logs/*.heapsnapshot 1> /dev/null 2>&1; then
-          heap_snapshot_produced="true"
-        fi
-        
         echo "## 🤖 Live Bot Test Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Test Type:** Limited-time live bot execution" >> $GITHUB_STEP_SUMMARY
@@ -407,9 +374,6 @@ jobs:
         echo "**Bot Command:** ${{ inputs.bot_command }}" >> $GITHUB_STEP_SUMMARY
         echo "**Fork Preflight:** ${{ inputs.fork_preflight }}" >> $GITHUB_STEP_SUMMARY
         echo "**Memory Guard:** ${{ inputs.memory_guard_mb }}MB" >> $GITHUB_STEP_SUMMARY
-        echo "**Job Timeout:** ${{ inputs.job_timeout_minutes }} minutes" >> $GITHUB_STEP_SUMMARY
-        echo "**Artifact Timeout:** ${{ inputs.artifact_timeout_minutes }} minutes" >> $GITHUB_STEP_SUMMARY
-        echo "**Heap Snapshot Produced:** ${heap_snapshot_produced}" >> $GITHUB_STEP_SUMMARY
         echo "**Heap Snapshots:** ${{ inputs.enable_heap_snapshot }}" >> $GITHUB_STEP_SUMMARY
         echo "**GC Tracing:** ${{ inputs.trace_gc }}" >> $GITHUB_STEP_SUMMARY
         echo "**Node.js Heap:** 6GB (enhanced for memory-intensive operations)" >> $GITHUB_STEP_SUMMARY

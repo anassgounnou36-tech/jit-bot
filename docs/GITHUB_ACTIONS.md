@@ -69,20 +69,15 @@ This repository includes two GitHub Actions workflows for testing and running th
 - Heap snapshots: Enable/disable (default: enabled)
 - GC tracing: Enable/disable (default: disabled)
 - Node.js Heap: 6GB (automatically configured for memory-intensive operations)
-- Job timeout: 1-60 minutes (default: 15)
-- Artifact timeout: 1-10 minutes (default: 3)
-- Artifact compression: 0-9 level (default: 6)
 
 **Safety Features:**
 - Concurrency protection (only one run at a time)
 - **Memory guard protection** (monitors RSS usage and prevents OOM crashes)
-- **Enhanced timeout protection** (job-level and step-level timeouts with reliable termination)
-- **Process cleanup** (comprehensive background process tracking and cleanup)
+- **Enhanced timeout protection** (hard timeout with SIGTERM/SIGKILL enforcement)
 - **Heap snapshot diagnostics** (captures memory snapshots before OOM for debugging)
 - **Enhanced memory management** (6GB Node.js heap with configurable options)
 - Preflight safety checks
-- **Reliable logging** (logs and artifacts always uploaded with timeout protection)
-- **Robust artifact upload** (timeout-protected, continue-on-error, configurable compression)
+- **Reliable logging** (logs and artifacts always uploaded regardless of execution outcome)
 - Comprehensive logging and artifacts with extended retention
 
 **How to run:**
