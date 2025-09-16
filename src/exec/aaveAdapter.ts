@@ -357,6 +357,13 @@ export class AaveAdapter {
   }
 
   /**
+   * Get maximum flashloan amount available (required method)
+   */
+  async getMaxLoanAmount(token: string): Promise<ethers.BigNumber> {
+    return this.getMaxFlashloanAmount(token);
+  }
+
+  /**
    * Get maximum flashloan amount available
    */
   async getMaxFlashloanAmount(token: string): Promise<ethers.BigNumber> {
@@ -369,6 +376,29 @@ export class AaveAdapter {
     }
     
     return this.getAvailableLiquidity(normalizedToken);
+  }
+
+  /**
+   * Build flashloan call data (required method)
+   */
+  async buildFlashloanCallData(
+    token: string,
+    amount: ethers.BigNumber,
+    receiverAddress: string,
+    userData: string
+  ): Promise<{
+    to: string;
+    data: string;
+    value: ethers.BigNumber;
+  }> {
+    return this.buildFlashloanCall(token, amount, receiverAddress, userData);
+  }
+
+  /**
+   * Estimate flashloan fee with dynamic premium (required method)
+   */
+  async estimateFee(token: string, amount: ethers.BigNumber): Promise<ethers.BigNumber> {
+    return this.calculateFlashloanFee(token, amount);
   }
 
   /**
