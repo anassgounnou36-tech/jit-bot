@@ -7,6 +7,14 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
+// Normalize mainnet URL with fallback and warning
+const mainnetUrl = process.env.ETHEREUM_RPC_URL || process.env.RPC_URL_HTTP || "";
+if (!mainnetUrl) {
+  console.warn("⚠️ Warning: No mainnet RPC URL configured. Set ETHEREUM_RPC_URL or RPC_URL_HTTP");
+} else if (!process.env.ETHEREUM_RPC_URL && process.env.RPC_URL_HTTP) {
+  console.log("ℹ️ Info: Using RPC_URL_HTTP as fallback for ETHEREUM_RPC_URL");
+}
+
 const config: HardhatUserConfig = {
   solidity: {
     compilers: [
@@ -23,8 +31,8 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
-      forking: process.env.ETHEREUM_RPC_URL ? {
-        url: process.env.ETHEREUM_RPC_URL,
+      forking: mainnetUrl ? {
+        url: mainnetUrl,
         blockNumber: process.env.FORK_BLOCK_NUMBER ? parseInt(process.env.FORK_BLOCK_NUMBER) : undefined,
       } : undefined,
       allowUnlimitedContractSize: true,
@@ -36,7 +44,7 @@ const config: HardhatUserConfig = {
       timeout: 60000,
     },
     mainnet: {
-      url: process.env.ETHEREUM_RPC_URL || "",
+      url: mainnetUrl,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
     arbitrum: {

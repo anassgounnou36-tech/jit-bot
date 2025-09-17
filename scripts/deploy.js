@@ -13,6 +13,88 @@ const { loadEnv } = require('./loadEnv');
 // Load environment variables from .env file
 loadEnv();
 
+/**
+ * Mask sensitive values for logging (show first 6 + last 4 characters)
+ */
+function mask(value) {
+  if (!value || value.length <= 10) {
+    return '***masked***';
+  }
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+/**
+ * Validate environment variables before deployment
+ */
+function validateEnvironment(network, dryRun) {
+  console.log('\n🔍 Environment Variables Diagnostic:');
+  
+  // Check ETHEREUM_RPC_URL and RPC_URL_HTTP
+  const ethereumRpcUrl = process.env.ETHEREUM_RPC_URL;
+  const rpcUrlHttp = process.env.RPC_URL_HTTP;
+  const finalRpcUrl = ethereumRpcUrl || rpcUrlHttp;
+  
+  console.log(`   ETHEREUM_RPC_URL: ${ethereumRpcUrl ? `${ethereumRpcUrl.slice(0, 30)}...` : 'not set'}`);
+  console.log(`   RPC_URL_HTTP: ${rpcUrlHttp ? `${rpcUrlHttp.slice(0, 30)}...` : 'not set'}`);
+  console.log(`   Final RPC URL: ${finalRpcUrl ? `${finalRpcUrl.slice(0, 30)}...` : 'MISSING'}`);
+  
+  // Check PRIVATE_KEY
+  const privateKey = process.env.PRIVATE_KEY;
+  console.log(`   PRIVATE_KEY: ${privateKey ? mask(privateKey) : 'not set'}`);
+  
+  // Check deployment-specific variables
+  const profitRecipient = process.env.PROFIT_RECIPIENT;
+  const positionManager = process.env.POSITION_MANAGER;
+  
+  console.log(`   DRY_RUN: ${process.env.DRY_RUN || 'not set'}`);
+  console.log(`   PROFIT_RECIPIENT: ${profitRecipient || 'not set (will use deployer address)'}`);
+  console.log(`   POSITION_MANAGER: ${positionManager || 'not set (will use default)'}`);
+  
+  // Validate required variables
+  const errors = [];
+  
+  if (!privateKey) {
+    errors.push('PRIVATE_KEY is required');
+  } else if (!privateKey.startsWith('0x') || privateKey.length !== 66) {
+    errors.push('PRIVATE_KEY must be a valid 32-byte hex string starting with 0x');
+  }
+  
+  if (!dryRun && (network === 'mainnet' || network === 'arbitrum')) {
+    if (!finalRpcUrl) {
+      errors.push('ETHEREUM_RPC_URL (or RPC_URL_HTTP) is required for mainnet deployment');
+    }
+  }
+  
+  // Validate addresses if provided and not empty
+  if (profitRecipient && profitRecipient.trim() !== '') {
+    try {
+      if (!ethers.utils.isAddress(profitRecipient.trim())) {
+        errors.push(`PROFIT_RECIPIENT contains invalid address: "${profitRecipient}"`);
+      }
+    } catch (error) {
+      errors.push(`PROFIT_RECIPIENT validation failed: ${error.message}`);
+    }
+  }
+  
+  if (positionManager && positionManager.trim() !== '') {
+    try {
+      if (!ethers.utils.isAddress(positionManager.trim())) {
+        errors.push(`POSITION_MANAGER contains invalid address: "${positionManager}"`);
+      }
+    } catch (error) {
+      errors.push(`POSITION_MANAGER validation failed: ${error.message}`);
+    }
+  }
+  
+  if (errors.length > 0) {
+    console.error('\n❌ Environment validation failed:');
+    errors.forEach(error => console.error(`   - ${error}`));
+    process.exit(1);
+  }
+  
+  console.log('✅ Environment validation passed\n');
+}
+
 async function deploy() {
   console.log('🚀 JIT Bot Deploy Script');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -37,6 +119,9 @@ async function deploy() {
     if (!dryRun && !process.env.I_UNDERSTAND_LIVE_RISK) {
       throw new Error('I_UNDERSTAND_LIVE_RISK=true required for live deployment');
     }
+
+    // Validate environment variables before proceeding
+    validateEnvironment(network, dryRun);
 
     // Check if already deployed
     const deploymentPath = path.join(__dirname, '../deployments', `${network}.json`);

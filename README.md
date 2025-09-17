@@ -524,6 +524,100 @@ The bot normalizes all token addresses to proper checksum format and validates a
 
 ## 🚀 Deployment
 
+### Environment Validation
+
+Before deploying, validate your environment configuration:
+
+```bash
+# Validate environment for mainnet deployment
+npm run validate:env mainnet
+
+# Validate environment for testnet deployment
+npm run validate:env sepolia
+```
+
+The validation script checks:
+- ✅ **Private Key**: Format and presence validation
+- ✅ **RPC URLs**: Automatic fallback from `RPC_URL_HTTP` to `ETHEREUM_RPC_URL`
+- ✅ **Address Variables**: `PROFIT_RECIPIENT` and `POSITION_MANAGER` validation
+- ✅ **Safety Settings**: DRY_RUN and live execution acknowledgment
+- ✅ **Optional Settings**: Etherscan API key and contract verification
+
+### Deployment Configuration
+
+Key environment variables:
+
+| Variable | Description | Required | Default | Example |
+|----------|-------------|----------|---------|---------|
+| `PRIVATE_KEY` | Deployer private key | Yes | - | `0x123...` |
+| `ETHEREUM_RPC_URL` | Primary RPC endpoint | Yes* | - | `https://eth-mainnet.alchemyapi.io/v2/...` |
+| `RPC_URL_HTTP` | Fallback RPC endpoint | No | - | `https://rpc.ankr.com/eth` |
+| `PROFIT_RECIPIENT` | Address to receive profits | No | Deployer address | `0xabc...` |
+| `POSITION_MANAGER` | Uniswap V3 Position Manager | No | `0xC36442b4a4522E871399CD717aBDD847Ab11FE88` | - |
+| `MIN_PROFIT_THRESHOLD` | Min profit in ETH | No | `0.01` | `0.01` |
+| `MAX_LOAN_SIZE` | Max loan size in ETH | No | `1000` | `1000` |
+
+**\*Note**: Either `ETHEREUM_RPC_URL` or `RPC_URL_HTTP` is required for mainnet deployment. The system will automatically use `RPC_URL_HTTP` as fallback if `ETHEREUM_RPC_URL` is not set.
+
+### Fork Deployment (Testing)
+
+Deploy to a Hardhat fork for testing:
+
+```bash
+# 1. Start a local fork
+npm run fork
+
+# 2. Deploy contracts to fork
+npm run deploy:fork
+
+# 3. Set contract address in .env
+echo "JIT_CONTRACT_ADDRESS=<deployed_address>" >> .env
+```
+
+### Mainnet Deployment (Production)
+
+**⚠️ CRITICAL SAFETY WARNING ⚠️**
+
+Mainnet deployment involves real funds and carries significant financial risk. Only proceed if you:
+- Have thoroughly tested on forks
+- Understand MEV competition dynamics
+- Have monitoring and alerting in place
+- Are prepared for potential losses
+
+```bash
+# 1. Validate environment configuration first
+npm run validate:env mainnet
+
+# 2. Deploy to mainnet (with built-in validation)
+npm run deploy:mainnet
+
+# 3. Verify deployment (optional)
+VERIFY_CONTRACTS=true npm run deploy:mainnet
+
+# 4. Fund the contract with gas ETH
+# Send ~0.1 ETH to the deployed contract address
+
+# 5. Start monitoring
+docker-compose -f docker-compose.monitoring.yml up -d
+```
+
+### Improved Error Handling
+
+The deployment system now provides enhanced error detection and resolution:
+
+- **Invalid Address Errors**: Clear messages identifying which environment variable contains an invalid address
+- **Empty Variable Detection**: Distinguishes between unset and empty string environment variables
+- **RPC URL Fallback**: Automatic fallback from `RPC_URL_HTTP` if `ETHEREUM_RPC_URL` is not set
+- **Early Validation**: All parameters validated before contract deployment begins
+- **Descriptive Failures**: Specific error messages for common deployment issues
+
+**Example Error Messages:**
+```bash
+❌ Environment variable PROFIT_RECIPIENT contains invalid address: ""
+❌ ETHEREUM_RPC_URL (or RPC_URL_HTTP) is required for mainnet deployment
+❌ POSITION_MANAGER contains invalid address: "0xinvalid"
+```
+
 1. **Deploy contracts**
    ```bash
    npx hardhat run scripts/deploy.ts --network mainnet
@@ -782,11 +876,16 @@ Environment variables for deployment:
 | Variable | Description | Required | Example |
 |----------|-------------|----------|---------|
 | `PRIVATE_KEY` | Deployer private key | Yes | `0x123...` |
-| `ETHEREUM_RPC_URL` | RPC endpoint | Yes | `https://...` |
+| `ETHEREUM_RPC_URL` | Primary RPC endpoint | Yes* | `https://...` |
+| `RPC_URL_HTTP` | Fallback RPC endpoint | No | `https://rpc.ankr.com/eth` |
+| `PROFIT_RECIPIENT` | Profit recipient address | No | `0xabc...` (defaults to deployer) |
+| `POSITION_MANAGER` | Uniswap V3 Position Manager | No | (defaults to mainnet address) |
 | `MIN_PROFIT_THRESHOLD` | Min profit in ETH | No | `0.01` |
 | `MAX_LOAN_SIZE` | Max loan size in ETH | No | `1000` |
 | `VERIFY_CONTRACTS` | Verify on Etherscan | No | `true` |
 | `ETHERSCAN_API_KEY` | Etherscan API key | No | `ABC123...` |
+
+**\*Note**: Either `ETHEREUM_RPC_URL` or `RPC_URL_HTTP` is required. The system automatically uses `RPC_URL_HTTP` as fallback for backward compatibility.
 
 ### Post-Deployment Steps
 

@@ -29,6 +29,7 @@
     "fixtures:update": "npm run fixtures:generate",
     "dry-run": "ts-node scripts/dry-run-simulation.ts",
     "dry-run:report": "npm run dry-run && echo 'Report saved to reports/dry-run-simulation-report.json'",
+    "validate:env": "node scripts/validate-env.js",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "lint:solidity": "npm run build",
