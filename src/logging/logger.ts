@@ -341,7 +341,7 @@ export function logStartupConfiguration(): void {
     msg: 'Bot configuration loaded',
     nodeEnv: config.nodeEnv,
     chain: config.chain,
-    simulationMode: config.simulationMode,
+    dryRun: config.dryRun,
     maxGasGwei: config.maxGasGwei,
     globalMinProfitUsd: config.globalMinProfitUsd,
     poolIds: config.poolIds,
@@ -349,9 +349,9 @@ export function logStartupConfiguration(): void {
     component: 'startup'
   });
   
-  if (config.simulationMode) {
+  if (config.dryRun) {
     logger.warn({
-      msg: 'Running in SIMULATION MODE - no live transactions will be executed',
+      msg: 'Running in DRY RUN MODE - no live transactions will be executed',
       component: 'startup'
     });
   }

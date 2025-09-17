@@ -176,29 +176,14 @@ export class PoolCoordinator extends EventEmitter {
     try {
       console.log(`🔍 Starting watcher for pool: ${pool.id}`);
       
-      // Create pool-specific watcher
-      const rpcUrl = process.env.ETHEREUM_RPC_URL || config.rpc.ethereum;
-      const watcher = new MempoolWatcher(rpcUrl);
+      // Create pool-specific watcher - this is deprecated in favor of centralized mempool watching
+      console.warn('Pool-specific watchers are deprecated. Use centralized MempoolWatcher in bot/index.ts');
       
-      // Listen for enhanced swap detections for logging
-      watcher.on('PendingSwapDetected', (enhanced: PendingSwapDetected) => {
-        // Check if this swap is for the current pool
-        if (enhanced.poolId === pool.id) {
-          this.logSwapDetected(enhanced, pool);
-        }
-      });
+      // For now, skip individual pool watchers since we have centralized monitoring
+      console.log(`⚠️  Skipping individual watcher for ${pool.id} - using centralized mempool monitoring`);
+      
+      return; // Skip individual pool watchers
 
-      // Listen for swap detections from this pool (legacy pipeline)
-      watcher.on('swapDetected', (swap: PendingSwap) => {
-        this.handleSwapDetected(swap, pool.id);
-      });
-
-      // Start the watcher
-      await watcher.start();
-      this.watchers.set(pool.id, watcher);
-      
-      console.log(`✅ Started watcher for pool: ${pool.id}`);
-      
     } catch (error: any) {
       console.error(`❌ Failed to start watcher for pool ${pool.id}:`, error.message);
       this.recordPoolFailure(pool.id, error.message);
@@ -214,7 +199,8 @@ export class PoolCoordinator extends EventEmitter {
     console.log('🔄 Subscribed to new blocks for opportunity evaluation');
   }
 
-  private logSwapDetected(enhanced: PendingSwapDetected, pool: PoolConfig): void {
+  // DEPRECATED: Pool-specific logging - use centralized mempool monitoring instead
+  /* private logSwapDetected(enhanced: PendingSwapDetected, pool: PoolConfig): void {
     try {
       const tokenSymbol = this.symbolForToken(pool, enhanced.tokenIn);
       const decimals = this.decimalsForToken(pool, enhanced.tokenIn);
@@ -230,15 +216,16 @@ export class PoolCoordinator extends EventEmitter {
         console.log(`🔄 Swap detected in ${pool.id}: ${amountFormatted} ${tokenSymbol}`);
       } else {
         // For other pools, include USD value
-        const usdValue = ethers.utils.formatUnits(enhanced.amountUSD, 18); // amountUSD is in 18 decimals
+        const usdValue = enhanced.amountUSD ? ethers.utils.formatUnits(enhanced.amountUSD, 18) : '0'; // amountUSD is in 18 decimals
         console.log(`🔄 Swap detected in ${pool.id}: ${amountFormatted} ${tokenSymbol} ($${parseFloat(usdValue).toFixed(2)})`);
       }
     } catch (error: any) {
       console.warn(`❌ Error logging swap for pool ${pool.id}:`, error.message);
     }
-  }
+  } */
 
-  private async handleSwapDetected(swap: PendingSwap, poolId: string): Promise<void> {
+  // DEPRECATED: Pool-specific handling - use centralized mempool monitoring instead  
+  /* private async handleSwapDetected(swap: PendingSwap, poolId: string): Promise<void> {
     const pool = this.pools.get(poolId);
     if (!pool || !pool.enabled) {
       return;

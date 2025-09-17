@@ -92,7 +92,7 @@ export class JitBot {
       poolCount: this.config.poolIds.length,
       flashbotsEnabled: !this.config.dryRun,
       mempoolWatcherEnabled: true,
-      flashloanPriority: this.config.flashloanPriority,
+      flashloanProviderPriority: this.config.flashloanProviderPriority,
       minSwapEth: this.config.minSwapEth,
       globalMinProfitUsd: this.config.globalMinProfitUsd
     });
@@ -158,6 +158,12 @@ export class JitBot {
 
       // Validate configuration
       await this.validateConfiguration();
+
+      // Validate wallet balance for live execution
+      if (!this.config.dryRun) {
+        const { validateWalletBalance } = await import('../config');
+        await validateWalletBalance(this.config);
+      }
 
       // Start mempool monitoring - always on
       await this.startMempoolMonitoring();
@@ -779,7 +785,7 @@ export class JitBot {
         liveRiskAcknowledged: this.config.liveRiskAcknowledged,
         mempoolWatcherEnabled: true,
         minSwapEth: this.config.minSwapEth,
-        flashloanPriority: this.config.flashloanPriority
+        flashloanProviderPriority: this.config.flashloanProviderPriority
       },
       metricsUrl: this.metrics.getMetricsUrl()
     };

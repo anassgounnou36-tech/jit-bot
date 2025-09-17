@@ -78,6 +78,13 @@ const flashloanProviderUsageTotal = new Counter({
   labelNames: ['provider']
 });
 
+// Victim replacement tracking
+const victimReplacementsTotal = new Counter({
+  name: 'victim_replacements_total',
+  help: 'Total number of victim transaction replacements detected',
+  labelNames: ['reason']
+});
+
 // Existing metrics
 const jitAttemptTotal = new Counter({
   name: 'jit_attempt_total',
@@ -288,11 +295,11 @@ export class PrometheusMetrics {
     this.setupRoutes();
     this.setupDefaultMetrics();
     
-    // Warn about deprecated METRICS_PORT
-    if (botConfig.metricsPort && !config?.port) {
+    // Warn about deprecated METRICS_PORT - now handled in config.ts
+    if (botConfig._deprecated?.metricsPort && !config?.port) {
       this.logger.warn({
         msg: 'METRICS_PORT is deprecated, please use PROMETHEUS_PORT instead',
-        metricsPort: botConfig.metricsPort,
+        metricsPort: botConfig._deprecated.metricsPort,
         prometheusPort: botConfig.prometheusPort
       });
     }
@@ -510,12 +517,12 @@ export class PrometheusMetrics {
     mempoolTxsRawMissingTotal.inc({ reason });
   }
 
-  public incrementMempoolSwapsDecoded(method: string): void {
-    mempoolSwapsDecodedTotal.inc({ method });
+  public incrementMempoolSwapsDecoded(): void {
+    mempoolSwapsDecodedTotal.inc();
   }
 
-  public incrementMempoolSwapsMatched(pool: string): void {
-    mempoolSwapsMatchedTotal.inc({ pool });
+  public incrementMempoolSwapsMatched(): void {
+    mempoolSwapsMatchedTotal.inc();
   }
 
   public incrementMempoolSwapsRejected(reason: string): void {
@@ -544,6 +551,10 @@ export class PrometheusMetrics {
 
   public incrementFlashloanProviderUsage(provider: string): void {
     flashloanProviderUsageTotal.inc({ provider });
+  }
+
+  public incrementVictimReplacements(reason: string = 'detected'): void {
+    victimReplacementsTotal.inc({ reason });
   }
 
   // Utility methods
