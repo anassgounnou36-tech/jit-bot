@@ -8,6 +8,10 @@
 const { ethers } = require('ethers');
 const fs = require('fs');
 const path = require('path');
+const { loadEnv } = require('./loadEnv');
+
+// Load environment variables from .env file
+loadEnv();
 
 async function deploy() {
   console.log('🚀 JIT Bot Deploy Script');

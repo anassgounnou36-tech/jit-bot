@@ -7,6 +7,10 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const { loadEnv } = require('./loadEnv');
+
+// Load environment variables from .env file
+loadEnv();
 
 async function run() {
   console.log('🚀 JIT Bot Run Script');
@@ -59,7 +63,7 @@ async function run() {
   console.log('⛽ Max gas price: ' + (process.env.MAX_GAS_GWEI || '100') + ' Gwei\n');
 
   // Start the bot
-  const botProcess = spawn('npx', ['ts-node', 'src/bot/index.ts', 'start'], {
+  const botProcess = spawn(process.execPath, ['-r', 'ts-node/register', 'src/bot/index.ts', 'start'], {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit',
     env: process.env
