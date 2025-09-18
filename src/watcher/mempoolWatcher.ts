@@ -220,6 +220,21 @@ export class MempoolWatcher extends EventEmitter {
         return;
       }
 
+      // Optional logging for all observed swaps in targeted pools
+      if (this.config.logTargetPoolSwaps) {
+        this.logger.info({
+          msg: 'SwapObserved',
+          txHash: swapData.txHash,
+          poolAddress: swapData.poolAddress,
+          tokenIn: swapData.tokenIn,
+          tokenOut: swapData.tokenOut,
+          feeTier: swapData.feeTier,
+          direction: swapData.direction,
+          amountIn: swapData.amountIn,
+          amountInHuman: swapData.amountInHuman,
+        });
+      }
+
       // Step 7: Validate thresholds
       const amountEth = parseFloat(ethers.utils.formatEther(swapData.amountIn));
       const estimatedUsdValue = parseFloat(swapData.estimatedUsd);
