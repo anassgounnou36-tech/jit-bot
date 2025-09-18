@@ -7,6 +7,12 @@ import { normalizeTokenAddress } from './util/constants';
 // Load environment variables
 dotenv.config();
 
+// Helper function to parse boolean environment variables
+function parseBool(v?: string, defaultValue = false): boolean {
+  if (v === undefined) return defaultValue;
+  return ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase());
+}
+
 export interface PoolConfig {
   pool: string;
   address: string;
@@ -53,6 +59,9 @@ export interface JitBotConfig {
   // Swap Detection Thresholds
   minSwapEth: number;
   minSwapUsd: number;
+  
+  // Logging configuration
+  logTargetPoolSwaps: boolean;
   
   // Gas and profit configuration
   maxGasGwei: number;
@@ -179,6 +188,9 @@ export function loadConfig(): JitBotConfig {
   const minSwapEth = parseFloat(process.env.MIN_SWAP_ETH || '10');
   const minSwapUsd = parseFloat(process.env.MIN_SWAP_USD || '0');
   
+  // Logging configuration
+  const logTargetPoolSwaps = parseBool(process.env.LOG_TARGET_POOL_SWAPS, false);
+  
   // Gas and profit configuration
   const maxGasGwei = parseFloat(process.env.MAX_GAS_GWEI || '100');
   const globalMinProfitUsd = parseFloat(process.env.GLOBAL_MIN_PROFIT_USD || '20');
@@ -291,6 +303,7 @@ export function loadConfig(): JitBotConfig {
     blocknativeApiKey,
     minSwapEth,
     minSwapUsd,
+    logTargetPoolSwaps,
     maxGasGwei,
     globalMinProfitUsd,
     captureRatio,

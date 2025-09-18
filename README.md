@@ -449,6 +449,28 @@ POOL_COOLDOWN_MS=300000      # Re-enable after 5 minutes
 MAX_CONCURRENT_WATCHERS=10   # Maximum concurrent pool watchers
 ```
 
+## 🔎 Verbose Swap Logging (Targeted Pools)
+
+To verify mempool monitoring end-to-end, you can enable a verbose logger that prints a line for every Uniswap v3 swap observed in your configured target pools.
+
+Environment variable:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LOG_TARGET_POOL_SWAPS` | When `true`, logs token addresses, fee tier, direction, and human-readable amounts for every observed swap in targeted pools. Logs occur even if the swap is below thresholds. | `false` |
+
+Example:
+
+```bash
+LOG_TARGET_POOL_SWAPS=true npm run run
+```
+
+Tip: To see more activity, set lower thresholds:
+
+```bash
+MIN_SWAP_ETH=0 MIN_SWAP_USD=0 LOG_TARGET_POOL_SWAPS=true npm run run
+```
+
 ### Orchestration Behavior
 
 1. **Concurrent Monitoring**: Each enabled pool runs its own mempool watcher
