@@ -81,6 +81,10 @@ export class MempoolWatcher extends EventEmitter {
   };
 
   private targetPools: Map<string, any> = new Map();
+  
+  // Deduplication cache for transaction hashes (TTL: 5 minutes)
+  private seenTxHashes: Map<string, number> = new Map();
+  private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(config: any, provider: ethers.providers.WebSocketProvider, fallbackProvider?: ethers.providers.JsonRpcProvider, metrics?: any) {
     super();
@@ -116,19 +120,76 @@ export class MempoolWatcher extends EventEmitter {
     });
   }
 
+  /**
+   * Check if a transaction has already been processed and mark it as seen
+   * @param txHash Transaction hash to check
+   * @param source Source that processed the transaction
+   * @returns true if already seen, false if new
+   */
+  private isTransactionSeen(txHash: string, source: string): boolean {
+    const now = Date.now();
+    
+    // Clean expired entries
+    this.cleanupExpiredCache();
+    
+    if (this.seenTxHashes.has(txHash)) {
+      this.logger.debug({
+        txHash,
+        source,
+        msg: 'Transaction already processed, skipping duplicate'
+      });
+      return true;
+    }
+    
+    // Mark as seen
+    this.seenTxHashes.set(txHash, now);
+    return false;
+  }
+
+  /**
+   * Clean up expired entries from the transaction cache
+   */
+  private cleanupExpiredCache(): void {
+    const now = Date.now();
+    for (const [txHash, timestamp] of this.seenTxHashes.entries()) {
+      if (now - timestamp > this.CACHE_TTL_MS) {
+        this.seenTxHashes.delete(txHash);
+      }
+    }
+  }
+
   async start(): Promise<void> {
     this.logger.info('Starting mempool watcher - always on for real-time monitoring');
     
     try {
+      const promises: Promise<void>[] = [];
+      const activeSubscriptions: string[] = [];
+
+      // Start Alchemy subscription if configured
       if (this.config.useAlchemyPendingTx) {
-        await this.subscribeAlchemyPendingTransactions();
-      } else {
-        await this.subscribeStandardPendingTransactions();
+        promises.push(this.subscribeAlchemyPendingTransactions());
+        activeSubscriptions.push('alchemy-pending-tx');
       }
+
+      // Start ABI fallback subscription if configured
+      if (this.config.useAbiPendingFallback) {
+        promises.push(this.subscribeAbiFallbackPending());
+        activeSubscriptions.push('abi-fallback');
+      }
+
+      // If neither is configured, fall back to standard subscription
+      if (!this.config.useAlchemyPendingTx && !this.config.useAbiPendingFallback) {
+        promises.push(this.subscribeStandardPendingTransactions());
+        activeSubscriptions.push('standard-pending');
+      }
+
+      // Wait for all subscriptions to establish
+      await Promise.all(promises);
 
       this.logger.info({
         msg: 'Mempool watcher started successfully',
-        provider: this.config.useAlchemyPendingTx ? 'alchemy-pending-tx' : 'ws-subscription',
+        subscriptions: activeSubscriptions,
+        deduplication: this.config.useAlchemyPendingTx && this.config.useAbiPendingFallback ? 'enabled' : 'disabled',
         features: ['raw-tx-capture', 'uniswap-decoding', 'pool-matching']
       });
     } catch (error: any) {
@@ -166,6 +227,38 @@ export class MempoolWatcher extends EventEmitter {
           err: error,
           txHash,
           msg: 'Error processing pending transaction'
+        });
+      });
+    });
+  }
+
+  /**
+   * Subscribe to generic pending transaction hashes and decode Uniswap router swaps via ABI
+   * This provides broader mempool coverage with any WebSocket-enabled Ethereum node
+   */
+  private async subscribeAbiFallbackPending(): Promise<void> {
+    // Subscribe to generic pending transaction hashes
+    await this.provider.send('eth_subscribe', ['newPendingTransactions']);
+    
+    this.logger.info({
+      msg: 'ABI fallback pending transactions subscription established',
+      concurrencyLimit: 10,
+      routers: this.UNISWAP_ROUTER_ADDRESSES
+    });
+
+    // Set up handler for transaction hashes
+    this.provider.on('pending', (txHash: string) => {
+      // Skip if already seen (deduplication)
+      if (this.isTransactionSeen(txHash, 'abi-fallback')) {
+        return;
+      }
+
+      this.processAbiFallbackTransaction(txHash).catch(error => {
+        this.logger.debug({
+          err: error,
+          txHash,
+          source: 'abi-fallback',
+          msg: 'Error processing ABI fallback transaction'
         });
       });
     });
@@ -221,7 +314,160 @@ export class MempoolWatcher extends EventEmitter {
     }
   }
 
+  /**
+   * Process transaction via ABI fallback path: fetch full tx, filter by router, and decode via ABI
+   */
+  private async processAbiFallbackTransaction(txHash: string): Promise<void> {
+    if (this.metrics) {
+      this.metrics.incrementMempoolTxsSeen('abi_fallback');
+    }
+
+    try {
+      // Step 1: Fetch full transaction object using getTransaction
+      const tx = await this.provider.getTransaction(txHash);
+      if (!tx || !tx.to) {
+        return;
+      }
+
+      // Step 2: Filter by router addresses - only process Uniswap router transactions
+      if (!this.isUniswapV3Transaction(tx.to)) {
+        return;
+      }
+
+      // Step 3: Check if transaction is already included in a block
+      if (tx.blockNumber) {
+        this.logger.debug({
+          txHash,
+          blockNumber: tx.blockNumber,
+          source: 'abi-fallback',
+          msg: 'CandidateRejected',
+          reason: 'already_included'
+        });
+        return;
+      }
+
+      // Step 4: Attempt to get raw transaction hex (with backoff/retry)
+      const rawTxHex = await this.getRawSignedTransactionWithRetry(txHash);
+      
+      // Allow proceeding without raw tx if reconstruction is enabled
+      if (!rawTxHex && !this.config.allowReconstructRawTx) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolTxsRawMissing('abi-fallback');
+        }
+        this.logger.debug({
+          txHash,
+          source: 'abi-fallback',
+          allowReconstruct: this.config.allowReconstructRawTx,
+          msg: 'CandidateRejected',
+          reason: 'raw_tx_unavailable'
+        });
+        return;
+      }
+
+      if (rawTxHex) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolTxsRawFetched('abi-fallback');
+        }
+      }
+
+      // Step 5: Parse transaction via ABI decoding
+      const swapData = await this.parseSwapTransaction(tx, rawTxHex || '');
+      if (!swapData) {
+        return;
+      }
+
+      // Log SwapObserved for ABI fallback source
+      if (this.config.logTargetPoolSwaps) {
+        this.logger.info({
+          msg: 'SwapObserved',
+          source: 'abi-fallback',
+          candidateId: swapData.candidateId,
+          txHash: swapData.txHash,
+          poolAddress: swapData.poolAddress,
+          tokenIn: swapData.tokenIn,
+          tokenOut: swapData.tokenOut,
+          feeTier: swapData.feeTier,
+          direction: swapData.direction,
+          amountIn: swapData.amountIn,
+          amountInHuman: swapData.amountInHuman,
+          decodedMethod: swapData.decodedCall.method
+        });
+      }
+
+      // Increment decoded counter with source label
+      if (this.metrics) {
+        this.metrics.incrementMempoolSwapsDecoded('abi_fallback');
+      }
+
+      // Step 6: Emit PendingSwapDetected with source tracking
+      this.logger.info({
+        msg: 'PendingSwapDetected',
+        source: 'abi-fallback',
+        candidateId: swapData.candidateId,
+        txHash: swapData.txHash,
+        poolAddress: swapData.poolAddress,
+        tokenIn: swapData.tokenIn,
+        tokenOut: swapData.tokenOut,
+        amountIn: swapData.amountIn,
+        amountInHuman: swapData.amountInHuman,
+        feeTier: swapData.feeTier,
+        direction: swapData.direction,
+        estimatedUsd: swapData.estimatedUsd,
+        decodedMethod: swapData.decodedCall.method,
+        provider: 'abi-fallback'
+      });
+
+      // Emit the event 
+      this.emit('swapDetected', swapData);
+
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash,
+        source: 'abi-fallback',
+        msg: 'Error in ABI fallback transaction processing'
+      });
+    }
+  }
+
+  /**
+   * Get raw signed transaction with retry and backoff for better reliability
+   */
+  private async getRawSignedTransactionWithRetry(txHash: string, maxRetries: number = 3): Promise<string> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const rawTx = await this.getRawSignedTransaction(txHash);
+        if (rawTx) {
+          return rawTx;
+        }
+      } catch (error: any) {
+        this.logger.debug({
+          err: error,
+          txHash,
+          attempt,
+          maxRetries,
+          source: 'abi-fallback',
+          msg: 'Error fetching raw transaction, retrying'
+        });
+      }
+
+      // Exponential backoff with jitter
+      if (attempt < maxRetries) {
+        const baseDelay = 100 * Math.pow(2, attempt - 1); // 100ms, 200ms, 400ms
+        const jitter = Math.random() * 50; // 0-50ms jitter
+        await new Promise(resolve => setTimeout(resolve, baseDelay + jitter));
+      }
+    }
+
+    return ''; // Return empty string if all retries failed
+  }
+
   private async processAlchemyTransactionObject(txData: any): Promise<void> {
+    // Check for deduplication first
+    if (this.isTransactionSeen(txData.hash, 'alchemy')) {
+      return;
+    }
+
     if (this.metrics) {
       this.metrics.incrementMempoolTxsSeen('alchemy');
     }
@@ -340,7 +586,7 @@ export class MempoolWatcher extends EventEmitter {
 
       // Increment decoded counter
       if (this.metrics) {
-        this.metrics.incrementMempoolSwapsDecoded();
+        this.metrics.incrementMempoolSwapsDecoded('alchemy');
       }
 
       // Emit PendingSwapDetected BEFORE threshold validation for visibility
@@ -397,6 +643,11 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   private async processPendingTransactionEnhanced(txHash: string): Promise<void> {
+    // Check for deduplication first
+    if (this.isTransactionSeen(txHash, 'local-node')) {
+      return;
+    }
+
     if (this.metrics) {
       this.metrics.incrementMempoolTxsSeen('local-node');
     }
@@ -491,7 +742,7 @@ export class MempoolWatcher extends EventEmitter {
 
       // Increment decoded counter
       if (this.metrics) {
-        this.metrics.incrementMempoolSwapsDecoded();
+        this.metrics.incrementMempoolSwapsDecoded('local-node');
       }
 
       // Step 7: Emit PendingSwapDetected BEFORE threshold validation for visibility

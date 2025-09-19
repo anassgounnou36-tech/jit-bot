@@ -25,7 +25,7 @@ const mempoolTxsRawMissingTotal = new Counter({
 const mempoolSwapsDecodedTotal = new Counter({
   name: 'mempool_swaps_decoded_total',
   help: 'Total number of Uniswap swaps successfully decoded',
-  labelNames: ['method']
+  labelNames: ['source']
 });
 
 const mempoolSwapsMatchedTotal = new Counter({
@@ -517,8 +517,8 @@ export class PrometheusMetrics {
     mempoolTxsRawMissingTotal.inc({ reason });
   }
 
-  public incrementMempoolSwapsDecoded(): void {
-    mempoolSwapsDecodedTotal.inc();
+  public incrementMempoolSwapsDecoded(source: string = 'legacy'): void {
+    mempoolSwapsDecodedTotal.inc({ source });
   }
 
   public incrementMempoolSwapsMatched(): void {
