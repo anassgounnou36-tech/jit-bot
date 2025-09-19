@@ -94,6 +94,10 @@ export interface JitBotConfig {
   // ABI-based pending transaction fallback
   useAbiPendingFallback: boolean;
   
+  // Pending transaction volume debug mode
+  logAllPendingTx: boolean;
+  pendingFeedWarnThresholdPerMin: number;
+  
   // Contract addresses
   jitContractAddress?: string;
   chainConfig: ChainConfig;
@@ -266,6 +270,10 @@ export function loadConfig(): JitBotConfig {
   // ABI-based pending transaction fallback configuration
   const useAbiPendingFallback = parseBool(process.env.USE_ABI_PENDING_FALLBACK, true);
   
+  // Pending transaction volume debug mode configuration
+  const logAllPendingTx = parseBool(process.env.LOG_ALL_PENDING_TX, false);
+  const pendingFeedWarnThresholdPerMin = parseInt(process.env.PENDING_FEED_WARN_THRESHOLD_PER_MIN || '100');
+  
   // Contract configuration
   const jitContractAddress = process.env.JIT_CONTRACT_ADDRESS;
   
@@ -331,6 +339,8 @@ export function loadConfig(): JitBotConfig {
     maxBundlesPerBlock,
     useAlchemyPendingTx,
     useAbiPendingFallback,
+    logAllPendingTx,
+    pendingFeedWarnThresholdPerMin,
     jitContractAddress,
     chainConfig,
     flashLoanProviders: jsonConfig.flashLoanProviders || {},

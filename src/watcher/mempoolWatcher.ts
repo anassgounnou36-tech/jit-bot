@@ -75,6 +75,8 @@ export class MempoolWatcher extends EventEmitter {
   private readonly UNISWAP_V3_SIGNATURES = {
     exactInputSingle: '0x414bf389',
     exactInput: '0xc04b8d59',
+    exactOutputSingle: '0xdb3e2198',
+    exactOutput: '0xf28c0498',
     multicall: '0xac9650d8',
     multicallWithDeadline: '0x5ae401dc',
     swap: '0x128acb08'
@@ -85,6 +87,13 @@ export class MempoolWatcher extends EventEmitter {
   // Deduplication cache for transaction hashes (TTL: 5 minutes)
   private seenTxHashes: Map<string, number> = new Map();
   private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  // Pending transaction volume tracking
+  private pendingTxCounts: Map<string, number> = new Map(); // source -> count
+  private lastPendingCount60s = 0;
+  private lowFeedConsecutiveMinutes = 0;
+  private pendingCountInterval10s?: NodeJS.Timeout;
+  private pendingCountInterval60s?: NodeJS.Timeout;
 
   constructor(config: any, provider: ethers.providers.WebSocketProvider, fallbackProvider?: ethers.providers.JsonRpcProvider, metrics?: any) {
     super();
@@ -164,6 +173,111 @@ export class MempoolWatcher extends EventEmitter {
     });
   }
 
+  /**
+   * Increment pending transaction count for a specific source
+   */
+  private incrementPendingCount(source: string): void {
+    const currentCount = this.pendingTxCounts.get(source) || 0;
+    this.pendingTxCounts.set(source, currentCount + 1);
+  }
+
+  /**
+   * Start pending transaction volume tracking with periodic logging
+   */
+  private startPendingVolumeTracking(): void {
+    this.logger.info({
+      msg: 'Starting pending transaction volume tracking',
+      logInterval10s: true,
+      logInterval60s: true,
+      warnThresholdPerMin: this.config.pendingFeedWarnThresholdPerMin
+    });
+
+    // Log counts every 10 seconds
+    this.pendingCountInterval10s = setInterval(() => {
+      this.logPendingCounts('10s');
+    }, 10 * 1000);
+
+    // Log counts every 60 seconds and check for low feed warning
+    this.pendingCountInterval60s = setInterval(() => {
+      this.logPendingCounts('60s');
+      this.checkPendingFeedHealth();
+    }, 60 * 1000);
+  }
+
+  /**
+   * Log pending transaction counts and reset counters
+   */
+  private logPendingCounts(interval: '10s' | '60s'): void {
+    let totalCount = 0;
+    this.pendingTxCounts.forEach((count) => {
+      totalCount += count;
+    });
+    
+    if (this.pendingTxCounts.size === 0) {
+      this.logger.info({
+        msg: `Pending TX count (${interval})`,
+        total: 0,
+        sources: {}
+      });
+    } else {
+      const sources: Record<string, number> = {};
+      this.pendingTxCounts.forEach((count, source) => {
+        sources[source] = count;
+      });
+
+      this.logger.info({
+        msg: `Pending TX count (${interval})`,
+        total: totalCount,
+        sources
+      });
+    }
+
+    // Store 60s count for warning detection
+    if (interval === '60s') {
+      this.lastPendingCount60s = totalCount;
+    }
+
+    // Reset counters
+    this.pendingTxCounts.clear();
+  }
+
+  /**
+   * Check if pending feed is too low and emit warning
+   */
+  private checkPendingFeedHealth(): void {
+    const threshold = this.config.pendingFeedWarnThresholdPerMin;
+    
+    if (this.lastPendingCount60s < threshold) {
+      this.lowFeedConsecutiveMinutes++;
+      
+      if (this.lowFeedConsecutiveMinutes >= 2) {
+        this.logger.warn({
+          msg: '⚠️ Provider feed is too low, consider using Erigon/Nethermind or upgraded RPC plan',
+          currentCount: this.lastPendingCount60s,
+          thresholdPerMin: threshold,
+          consecutiveMinutes: this.lowFeedConsecutiveMinutes
+        });
+      }
+    } else {
+      // Reset consecutive counter if feed is healthy
+      this.lowFeedConsecutiveMinutes = 0;
+    }
+  }
+
+  /**
+   * Stop pending transaction volume tracking
+   */
+  private stopPendingVolumeTracking(): void {
+    if (this.pendingCountInterval10s) {
+      clearInterval(this.pendingCountInterval10s);
+      this.pendingCountInterval10s = undefined;
+    }
+    if (this.pendingCountInterval60s) {
+      clearInterval(this.pendingCountInterval60s);
+      this.pendingCountInterval60s = undefined;
+    }
+  }
+
   async start(): Promise<void> {
     this.logger.info('Starting mempool watcher - always on for real-time monitoring');
     
@@ -196,8 +310,15 @@ export class MempoolWatcher extends EventEmitter {
         msg: 'Mempool watcher started successfully',
         subscriptions: activeSubscriptions,
         deduplication: this.config.useAlchemyPendingTx && this.config.useAbiPendingFallback ? 'enabled' : 'disabled',
-        features: ['raw-tx-capture', 'uniswap-decoding', 'pool-matching']
+        features: ['raw-tx-capture', 'uniswap-decoding', 'pool-matching'],
+        logAllPendingTx: this.config.logAllPendingTx,
+        pendingFeedWarnThreshold: this.config.pendingFeedWarnThresholdPerMin
       });
+
+      // Start pending transaction volume tracking if enabled
+      if (this.config.logAllPendingTx) {
+        this.startPendingVolumeTracking();
+      }
     } catch (error: any) {
       this.logger.error({
         err: error,
@@ -209,6 +330,9 @@ export class MempoolWatcher extends EventEmitter {
 
   async stop(): Promise<void> {
     try {
+      // Stop pending volume tracking
+      this.stopPendingVolumeTracking();
+      
       if (this.provider) {
         await this.provider.destroy();
       }
@@ -254,6 +378,11 @@ export class MempoolWatcher extends EventEmitter {
 
     // Set up handler for transaction hashes
     this.provider.on('pending', (txHash: string) => {
+      // Count pending transactions if debug mode is enabled
+      if (this.config.logAllPendingTx) {
+        this.incrementPendingCount('abi-fallback');
+      }
+
       // Skip if already seen (deduplication)
       if (this.isTransactionSeen(txHash, 'abi-fallback')) {
         return;
@@ -294,6 +423,12 @@ export class MempoolWatcher extends EventEmitter {
           
           if (message.method === 'alchemy_pendingTransactions' && message.params?.result) {
             const txData = message.params.result;
+            
+            // Count pending transactions if debug mode is enabled
+            if (this.config.logAllPendingTx) {
+              this.incrementPendingCount('alchemy');
+            }
+            
             this.processAlchemyTransactionObject(txData).catch(error => {
               this.logger.debug({
                 err: error,
@@ -984,6 +1119,8 @@ export class MempoolWatcher extends EventEmitter {
       const routerIface = new ethers.utils.Interface([
         'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96))',
         'function exactInput((bytes path, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum))',
+        'function exactOutputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96))',
+        'function exactOutput((bytes path, address recipient, uint256 deadline, uint256 amountOut, uint256 amountInMaximum))',
         'function multicall(bytes[] data) external payable',
         'function multicall(uint256 deadline, bytes[] data) external payable'
       ]);
@@ -1011,6 +1148,12 @@ export class MempoolWatcher extends EventEmitter {
         
         case 'exactInput':
           return await this.parseExactInput(tx, rawTxHex, parsed.args);
+        
+        case 'exactOutputSingle':
+          return await this.parseExactOutputSingle(tx, rawTxHex, parsed.args);
+        
+        case 'exactOutput':
+          return await this.parseExactOutput(tx, rawTxHex, parsed.args);
         
         case 'multicall':
           return await this.parseMulticall(tx, rawTxHex, parsed.args);
@@ -1220,6 +1363,161 @@ export class MempoolWatcher extends EventEmitter {
     }
   }
 
+  private async parseExactOutputSingle(
+    tx: ethers.providers.TransactionResponse, 
+    rawTxHex: string, 
+    args: any
+  ): Promise<PendingSwapDetected | null> {
+    try {
+      const params = args[0]; // exactOutputSingle takes a struct as first param
+      const { tokenIn, tokenOut, fee, amountOut, amountInMaximum } = params;
+
+      // Find target pool
+      const poolKey = `${tokenIn.toLowerCase()}-${tokenOut.toLowerCase()}-${fee}`;
+      const reversePoolKey = `${tokenOut.toLowerCase()}-${tokenIn.toLowerCase()}-${fee}`;
+      
+      const targetPool = this.targetPools.get(poolKey) || this.targetPools.get(reversePoolKey);
+      if (!targetPool) {
+        return null; // Not a pool we're monitoring
+      }
+
+      // Determine direction
+      const direction = tokenIn.toLowerCase() === targetPool.token0.toLowerCase() ? 'token0->token1' : 'token1->token0';
+
+      // For exactOutputSingle, we use amountInMaximum as the input estimate for USD calculation
+      const estimatedUsdValue = await this.estimateUSDValue(tokenIn, amountInMaximum);
+
+      const currentBlock = await this.provider.getBlockNumber();
+
+      const swapData: PendingSwapDetected = {
+        candidateId: `${tx.hash}_${Math.floor(Date.now() / 1000)}`,
+        txHash: tx.hash!,
+        rawTxHex,
+        poolAddress: targetPool.address,
+        tokenIn,
+        tokenOut,
+        amountIn: amountInMaximum.toString(), // Maximum amount in for exactOutput
+        amountInHuman: this.formatTokenAmount(amountInMaximum, tokenIn === targetPool.token0 ? targetPool.decimals0 : targetPool.decimals1),
+        amountOutMin: amountOut.toString(), // This is the exact output amount
+        feeTier: fee,
+        direction,
+        estimatedUsd: estimatedUsdValue.toString(),
+        blockNumberSeen: currentBlock,
+        timestamp: Math.floor(Date.now() / 1000),
+        provider: 'local-node',
+        decodedCall: {
+          method: 'exactOutputSingle',
+          params: {
+            tokenIn,
+            tokenOut,
+            fee,
+            amountOut: amountOut.toString(),
+            amountInMaximum: amountInMaximum.toString(),
+            recipient: params.recipient,
+            deadline: params.deadline.toString(),
+            sqrtPriceLimitX96: params.sqrtPriceLimitX96 ? params.sqrtPriceLimitX96.toString() : undefined
+          }
+        },
+        // Legacy compatibility
+        id: tx.hash,
+        poolId: targetPool.pool,
+        amountUSD: estimatedUsdValue.toString(),
+        poolFeeTier: fee,
+        calldata: tx.data
+      };
+
+      return swapData;
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        msg: 'Error parsing exactOutputSingle'
+      });
+      return null;
+    }
+  }
+
+  private async parseExactOutput(
+    tx: ethers.providers.TransactionResponse, 
+    rawTxHex: string, 
+    args: any
+  ): Promise<PendingSwapDetected | null> {
+    try {
+      const { path, amountOut, amountInMaximum } = args;
+      
+      // Decode path to get tokens and fees
+      const pathInfo = this.decodePath(path);
+      if (!pathInfo || pathInfo.tokens.length < 2) {
+        return null;
+      }
+
+      // For multi-hop swaps, we focus on the first hop
+      const tokenIn = pathInfo.tokens[0];
+      const tokenOut = pathInfo.tokens[1];
+      const fee = pathInfo.fees[0];
+
+      // Find target pool
+      const poolKey = `${tokenIn.toLowerCase()}-${tokenOut.toLowerCase()}-${fee}`;
+      const reversePoolKey = `${tokenOut.toLowerCase()}-${tokenIn.toLowerCase()}-${fee}`;
+      
+      const targetPool = this.targetPools.get(poolKey) || this.targetPools.get(reversePoolKey);
+      if (!targetPool) {
+        return null; // Not a pool we're monitoring
+      }
+
+      // Determine direction
+      const direction = tokenIn.toLowerCase() === targetPool.token0.toLowerCase() ? 'token0->token1' : 'token1->token0';
+
+      // For exactOutput, we use amountInMaximum as the input estimate for USD calculation
+      const estimatedUsdValue = await this.estimateUSDValue(tokenIn, amountInMaximum);
+
+      const currentBlock = await this.provider.getBlockNumber();
+
+      const swapData: PendingSwapDetected = {
+        candidateId: `${tx.hash}_${Math.floor(Date.now() / 1000)}`,
+        txHash: tx.hash!,
+        rawTxHex,
+        poolAddress: targetPool.address,
+        tokenIn,
+        tokenOut,
+        amountIn: amountInMaximum.toString(), // Maximum amount in for exactOutput
+        amountInHuman: this.formatTokenAmount(amountInMaximum, tokenIn === targetPool.token0 ? targetPool.decimals0 : targetPool.decimals1),
+        amountOutMin: amountOut.toString(), // This is the exact output amount
+        feeTier: fee,
+        direction,
+        estimatedUsd: estimatedUsdValue.toString(),
+        blockNumberSeen: currentBlock,
+        timestamp: Math.floor(Date.now() / 1000),
+        provider: 'local-node',
+        decodedCall: {
+          method: 'exactOutput',
+          params: {
+            path: pathInfo,
+            amountOut: amountOut.toString(),
+            amountInMaximum: amountInMaximum.toString(),
+            recipient: args.recipient,
+            deadline: args.deadline.toString()
+          }
+        },
+        // Legacy compatibility
+        id: tx.hash,
+        poolId: targetPool.pool,
+        amountUSD: estimatedUsdValue.toString(),
+        poolFeeTier: fee,
+        calldata: tx.data
+      };
+
+      return swapData;
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        msg: 'Error parsing exactOutput'
+      });
+      return null;
+    }
+  }
+
   private async parseMulticall(
     tx: ethers.providers.TransactionResponse, 
     rawTxHex: string, 
@@ -1249,7 +1547,9 @@ export class MempoolWatcher extends EventEmitter {
         const methodId = callData.slice(0, 10);
         
         if (methodId === this.UNISWAP_V3_SIGNATURES.exactInputSingle || 
-            methodId === this.UNISWAP_V3_SIGNATURES.exactInput) {
+            methodId === this.UNISWAP_V3_SIGNATURES.exactInput ||
+            methodId === this.UNISWAP_V3_SIGNATURES.exactOutputSingle ||
+            methodId === this.UNISWAP_V3_SIGNATURES.exactOutput) {
           
           // Recursively parse the nested call
           const nestedTx = { ...tx, data: callData };

@@ -558,6 +558,95 @@ Metrics include source labels to distinguish between capture methods:
 
 ### Router Address Filtering
 
+The bot automatically filters transactions sent to supported Uniswap router addresses and decodes swap methods including:
+
+- `exactInputSingle` - Single-hop exact input swap
+- `exactInput` - Multi-hop exact input swap with path encoding
+- `exactOutputSingle` - Single-hop exact output swap (NEW)
+- `exactOutput` - Multi-hop exact output swap with path encoding (NEW)
+- `multicall` - Batch transactions containing any of the above methods
+
+## 🔍 Pending Transaction Volume Debug Mode
+
+For advanced mempool monitoring and provider health diagnostics, the bot includes a pending transaction volume debug mode that counts and logs all pending transaction hashes before any filtering or decoding.
+
+Environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LOG_ALL_PENDING_TX` | When `true`, count and log all pending transaction hashes before filtering/decoding | `false` |
+| `PENDING_FEED_WARN_THRESHOLD_PER_MIN` | Warning threshold for provider feed health (transactions per minute) | `100` |
+
+### Features
+
+- **Volume counting** - Counts all pending transactions from each source (alchemy, abi-fallback)
+- **Periodic logging** - Emits counts every 10 seconds and every 60 seconds
+- **Provider health warnings** - Warns if feed drops below threshold for 2 consecutive minutes
+- **Source labeling** - Distinguishes between different provider paths
+
+Example configuration:
+
+```bash
+# Enable pending transaction volume tracking
+LOG_ALL_PENDING_TX=true
+PENDING_FEED_WARN_THRESHOLD_PER_MIN=50
+
+# Run with debug mode
+npm run run
+```
+
+### Sample Output
+
+```
+[INFO] Pending TX count (10s): 45 sources: {"abi-fallback": 45}
+[INFO] Pending TX count (60s): 267 sources: {"abi-fallback": 267}
+[WARN] ⚠️ Provider feed is too low, consider using Erigon/Nethermind or upgraded RPC plan
+```
+
+### Provider Starvation Warnings
+
+The bot monitors pending transaction volume and issues warnings when the feed appears insufficient:
+
+- Tracks 60-second pending transaction counts
+- Issues warning if count falls below `PENDING_FEED_WARN_THRESHOLD_PER_MIN` for 2 consecutive minutes
+- Suggests using Erigon/Nethermind nodes or upgraded RPC plans for better mempool coverage
+
+## 🧰 Standalone Pending Counter Script
+
+For independent pending transaction volume measurement, use the standalone counter script:
+
+```bash
+# Using environment variable
+WS_URL=wss://your-node.com/ws node scripts/count-pending.js
+
+# Or using RPC_URL_WS
+RPC_URL_WS=wss://eth-mainnet.ws.alchemyapi.io/v2/YOUR_KEY node scripts/count-pending.js
+```
+
+Features:
+- Minimal dependencies (only requires WebSocket connection)
+- Counts raw pending transaction hashes
+- Prints per-10s and per-60s totals
+- Exits cleanly on SIGINT (Ctrl+C)
+- Automatic reconnection on connection loss
+
+## 🔄 Raw Transaction Fallback Handling
+
+The bot includes robust fallback handling for raw transaction retrieval:
+
+1. **Primary method**: `eth_getRawTransactionByHash` on main provider
+2. **Fallback method**: `eth_getRawTransactionByHash` on fallback provider (if configured)  
+3. **Reconstruction**: Raw transaction reconstruction from transaction object (if `ALLOW_RECONSTRUCT_RAW_TX=true`)
+4. **Graceful degradation**: Decoding continues without raw hex if all methods fail
+
+Benefits:
+- ✅ **Provider compatibility** - works even if provider doesn't support `eth_getRawTransactionByHash`
+- ✅ **No crashes** - absence of raw transaction data doesn't block decoding
+- ✅ **Automatic fallback** - tries multiple methods transparently
+- ✅ **Debug logging** - tracks which method successfully retrieves raw data
+
+### Router Address Filtering (Previous Content)
+
 Both modes filter for transactions sent to canonical Uniswap router addresses:
 - `0xE592427A0AEce92De3Edee1F18E0157C05861564` (Uniswap V3 SwapRouter)
 - `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` (SwapRouter02)  
