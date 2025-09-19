@@ -508,6 +508,63 @@ The feature automatically filters for transactions sent to:
 
 When enabled, you should see increased `SwapObserved` activity and `mempool_swaps_decoded_total` metrics.
 
+## 🔗 ABI-Based Pending Transaction Fallback
+
+For broader mempool coverage that works with any WebSocket-enabled Ethereum node, the bot supports an ABI-based pending transaction fallback that subscribes to generic pending transaction hashes and decodes Uniswap router swaps via ABI parsing.
+
+Environment variable:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `USE_ABI_PENDING_FALLBACK` | When `true`, subscribes to generic pending tx hashes (eth_subscribe newPendingTransactions), fetches full tx objects, and decodes Uniswap router calls via ABI. Works with any WebSocket-enabled Ethereum node and provides broader mempool coverage. | `true` |
+
+Benefits of ABI fallback:
+- ✅ **Universal compatibility** - works with any WebSocket-enabled Ethereum node (Geth, Nethermind, Alchemy, Infura)
+- ✅ **Broader coverage** - captures all pending transactions, not just pre-filtered ones
+- ✅ **Provider independence** - not limited to specific RPC provider features
+- ✅ **Retry logic** - includes exponential backoff for transaction fetching reliability
+- ✅ **Deduplication** - runs in parallel with Alchemy mode when both are enabled
+
+Example configuration:
+
+```bash
+# Enable ABI fallback for maximum coverage
+USE_ABI_PENDING_FALLBACK=true
+
+# Can be combined with Alchemy for dual coverage
+USE_ALCHEMY_PENDING_TX=true
+USE_ABI_PENDING_FALLBACK=true
+
+# Monitoring and debugging
+LOG_TARGET_POOL_SWAPS=true
+ALLOW_RECONSTRUCT_RAW_TX=true
+
+npm run run
+```
+
+### Dual Mode Operation
+
+When both Alchemy and ABI fallback are enabled, the bot runs both subscriptions in parallel with automatic deduplication:
+
+1. **Alchemy subscription** - filtered, fast, provider-specific
+2. **ABI fallback subscription** - comprehensive, universal, slower
+3. **Deduplication** - shared 5-minute TTL cache prevents duplicate processing
+4. **Source tracking** - metrics and logs track which path decoded each transaction
+
+Metrics include source labels to distinguish between capture methods:
+- `mempool_swaps_decoded_total{source="alchemy"}` - swaps from Alchemy subscription
+- `mempool_swaps_decoded_total{source="abi_fallback"}` - swaps from ABI fallback
+- `mempool_txs_seen_total{provider="abi_fallback"}` - total transactions processed by fallback
+
+### Router Address Filtering
+
+Both modes filter for transactions sent to canonical Uniswap router addresses:
+- `0xE592427A0AEce92De3Edee1F18E0157C05861564` (Uniswap V3 SwapRouter)
+- `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` (SwapRouter02)  
+- `0xEf1c6E67703c7BD7107eed8303Fbe6EC2554BF6B` (Universal Router)
+
+See `reports/sample-pending-abi.json` for an example of captured transaction structure from the ABI fallback path.
+
 ### Orchestration Behavior
 
 1. **Concurrent Monitoring**: Each enabled pool runs its own mempool watcher

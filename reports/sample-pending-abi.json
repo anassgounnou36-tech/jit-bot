@@ -1,0 +1,79 @@
+{
+  "description": "Sample mempool swap captured using ABI fallback pending transaction subscription",
+  "timestamp": "2024-01-15T10:32:15.456Z",
+  "source": "abi-fallback",
+  "candidate": {
+    "candidateId": "swap_0xdef789abc123_20241115_103215",
+    "txHash": "0xdef789abc123456def789abc123456def789abc123456def789abc123456def789",
+    "rawTxHex": "0x02f8b1...[truncated for privacy]",
+    "poolAddress": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
+    "tokenIn": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "tokenOut": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "amountIn": "500000000000000000",
+    "amountInHuman": "0.5 WETH",
+    "amountOutMin": "1245000000",
+    "feeTier": 500,
+    "direction": "token1->token0",
+    "estimatedUsd": "1250.0",
+    "blockNumberSeen": 18500050,
+    "timestamp": 1705316735456,
+    "provider": "abi-fallback",
+    "decodedCall": {
+      "method": "exactInputSingle",
+      "params": {
+        "tokenIn": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "tokenOut": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "fee": 500,
+        "recipient": "0x1234567890123456789012345678901234567890",
+        "deadline": 1705317035,
+        "amountIn": "500000000000000000",
+        "amountOutMinimum": "1245000000",
+        "sqrtPriceLimitX96": "0"
+      }
+    },
+    "id": "swap_0xdef789abc123_20241115_103215",
+    "poolId": "WETH-USDC-0.05%",
+    "amountUSD": "1250.0",
+    "poolFeeTier": 500,
+    "calldata": "0x414bf389000000000000000000000000...[truncated]",
+    "amountOutEstimated": "1245.0",
+    "from": "0x1234567890123456789012345678901234567890",
+    "to": "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+  },
+  "metadata": {
+    "captureMode": "abi-fallback",
+    "rawTxSource": "eth_getRawTransactionByHash",
+    "routerAddress": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+    "routerName": "Uniswap V3 SwapRouter",
+    "poolName": "WETH/USDC 0.05%",
+    "processFlow": [
+      "1. Received txHash from eth_subscribe newPendingTransactions",
+      "2. Fetched full transaction object using provider.getTransaction()",
+      "3. Filtered by router address (only Uniswap router transactions processed)",
+      "4. Fetched raw transaction bytes using eth_getRawTransactionByHash",
+      "5. Decoded transaction input using Uniswap V3 router ABI",
+      "6. Extracted swap parameters and enriched with pool metadata"
+    ],
+    "notes": [
+      "Transaction captured via generic pending tx subscription",
+      "Works with any WebSocket-enabled Ethereum node (not Alchemy-specific)",
+      "Provides broader mempool coverage than filtered subscriptions",
+      "Includes retry logic with exponential backoff for raw tx fetching",
+      "Addresses have been sanitized for privacy"
+    ],
+    "deduplication": {
+      "enabled": true,
+      "cacheKey": "txHash",
+      "ttlMs": 300000,
+      "description": "Prevents duplicate processing when both Alchemy and ABI fallback are enabled"
+    },
+    "metrics": {
+      "source": "abi_fallback",
+      "counters": [
+        "mempool_txs_seen_total{provider=\"abi_fallback\"}",
+        "mempool_swaps_decoded_total{source=\"abi_fallback\"}",
+        "mempool_txs_raw_fetched_total{method=\"abi-fallback\"}"
+      ]
+    }
+  }
+}

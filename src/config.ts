@@ -91,6 +91,9 @@ export interface JitBotConfig {
   // Alchemy-specific configuration
   useAlchemyPendingTx: boolean;
   
+  // ABI-based pending transaction fallback
+  useAbiPendingFallback: boolean;
+  
   // Contract addresses
   jitContractAddress?: string;
   chainConfig: ChainConfig;
@@ -260,6 +263,9 @@ export function loadConfig(): JitBotConfig {
   // Alchemy configuration
   const useAlchemyPendingTx = parseBool(process.env.USE_ALCHEMY_PENDING_TX, false);
   
+  // ABI-based pending transaction fallback configuration
+  const useAbiPendingFallback = parseBool(process.env.USE_ABI_PENDING_FALLBACK, true);
+  
   // Contract configuration
   const jitContractAddress = process.env.JIT_CONTRACT_ADDRESS;
   
@@ -324,6 +330,7 @@ export function loadConfig(): JitBotConfig {
     allowReconstructRawTx,
     maxBundlesPerBlock,
     useAlchemyPendingTx,
+    useAbiPendingFallback,
     jitContractAddress,
     chainConfig,
     flashLoanProviders: jsonConfig.flashLoanProviders || {},
