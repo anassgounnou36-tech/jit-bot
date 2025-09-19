@@ -109,7 +109,7 @@ describe('MempoolWatcher Decode Tests', () => {
       wait: async () => ({ 
         to: to || '0xE592427A0AEce92De3Edee1F18E0157C05861564',
         from: '0x1234567890123456789012345678901234567890',
-        contractAddress: null,
+        contractAddress: '0x0000000000000000000000000000000000000000',
         transactionIndex: 0,
         gasUsed: ethers.BigNumber.from('150000'),
         logsBloom: '0x',
