@@ -278,7 +278,7 @@ export class PoolCoordinator extends EventEmitter {
       console.error(`❌ Error processing swap for ${poolId}:`, error.message);
       this.recordPoolFailure(poolId, error.message);
     }
-  }
+  } */
 
   private addOpportunityCandidate(candidate: OpportunityCandidate): void {
     const opportunities = this.currentOpportunities.get(candidate.blockNumber) || [];
