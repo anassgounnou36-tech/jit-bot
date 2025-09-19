@@ -471,6 +471,43 @@ Tip: To see more activity, set lower thresholds:
 MIN_SWAP_ETH=0 MIN_SWAP_USD=0 LOG_TARGET_POOL_SWAPS=true npm run run
 ```
 
+## 🔗 Enhanced Mempool Monitoring (Alchemy)
+
+For improved mempool monitoring and swap detection, the bot supports Alchemy's enhanced `alchemy_pendingTransactions` subscription, which provides full transaction objects and better reliability for high-frequency swap detection.
+
+Environment variable:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `USE_ALCHEMY_PENDING_TX` | When `true`, uses Alchemy's enhanced WebSocket subscription with Uniswap router filters. Receives full transaction objects directly and improves swap detection reliability. | `false` |
+
+Benefits of Alchemy mode:
+- ✅ **Full transaction objects** - receive complete tx data including input
+- ✅ **Filtered subscriptions** - only get transactions to Uniswap routers  
+- ✅ **Reduced latency** - skip additional RPC calls for transaction data
+- ✅ **Higher reliability** - better detection of swap transactions
+- ✅ **Fallback support** - automatically falls back to standard subscription if Alchemy is unavailable
+
+Example configuration:
+
+```bash
+# Enable Alchemy enhanced monitoring
+USE_ALCHEMY_PENDING_TX=true
+LOG_TARGET_POOL_SWAPS=true
+ALLOW_RECONSTRUCT_RAW_TX=true
+MIN_SWAP_ETH=0
+MIN_SWAP_USD=0
+
+npm run run
+```
+
+The feature automatically filters for transactions sent to:
+- `0xE592427A0AEce92De3Edee1F18E0157C05861564` (Uniswap V3 SwapRouter)
+- `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` (SwapRouter02)  
+- `0xEf1c6E67703c7BD7107eed8303Fbe6EC2554BF6B` (Universal Router)
+
+When enabled, you should see increased `SwapObserved` activity and `mempool_swaps_decoded_total` metrics.
+
 ### Orchestration Behavior
 
 1. **Concurrent Monitoring**: Each enabled pool runs its own mempool watcher

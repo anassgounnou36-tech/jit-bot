@@ -64,6 +64,13 @@ export class MempoolWatcher extends EventEmitter {
   
   private readonly UNISWAP_V3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564';
   private readonly UNISWAP_V3_ROUTER_V2 = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45';
+  private readonly UNISWAP_UNIVERSAL_ROUTER = '0xEf1c6E67703c7BD7107eed8303Fbe6EC2554BF6B';
+  
+  private readonly UNISWAP_ROUTER_ADDRESSES = [
+    this.UNISWAP_V3_ROUTER,
+    this.UNISWAP_V3_ROUTER_V2,
+    this.UNISWAP_UNIVERSAL_ROUTER
+  ];
   
   private readonly UNISWAP_V3_SIGNATURES = {
     exactInputSingle: '0x414bf389',
@@ -113,21 +120,15 @@ export class MempoolWatcher extends EventEmitter {
     this.logger.info('Starting mempool watcher - always on for real-time monitoring');
     
     try {
-      await this.provider.send('eth_subscribe', ['newPendingTransactions']);
-      
-      this.provider.on('pending', (txHash: string) => {
-        this.processPendingTransactionEnhanced(txHash).catch(error => {
-          this.logger.debug({
-            err: error,
-            txHash,
-            msg: 'Error processing pending transaction'
-          });
-        });
-      });
+      if (this.config.useAlchemyPendingTx) {
+        await this.subscribeAlchemyPendingTransactions();
+      } else {
+        await this.subscribeStandardPendingTransactions();
+      }
 
       this.logger.info({
         msg: 'Mempool watcher started successfully',
-        provider: 'ws-subscription',
+        provider: this.config.useAlchemyPendingTx ? 'alchemy-pending-tx' : 'ws-subscription',
         features: ['raw-tx-capture', 'uniswap-decoding', 'pool-matching']
       });
     } catch (error: any) {
@@ -152,6 +153,245 @@ export class MempoolWatcher extends EventEmitter {
       this.logger.error({
         err: error,
         msg: 'Error stopping mempool watcher'
+      });
+    }
+  }
+
+  private async subscribeStandardPendingTransactions(): Promise<void> {
+    await this.provider.send('eth_subscribe', ['newPendingTransactions']);
+    
+    this.provider.on('pending', (txHash: string) => {
+      this.processPendingTransactionEnhanced(txHash).catch(error => {
+        this.logger.debug({
+          err: error,
+          txHash,
+          msg: 'Error processing pending transaction'
+        });
+      });
+    });
+  }
+
+  private async subscribeAlchemyPendingTransactions(): Promise<void> {
+    try {
+      // Subscribe to Alchemy's enhanced pending transactions with filters
+      const subscriptionPayload = {
+        toAddress: this.UNISWAP_ROUTER_ADDRESSES,
+        includeRemoved: false,
+        hashesOnly: false
+      };
+
+      const result = await this.provider.send('alchemy_pendingTransactions', [subscriptionPayload]);
+      
+      this.logger.info({
+        msg: 'Alchemy pending transactions subscription established',
+        subscriptionId: result,
+        filteredAddresses: this.UNISWAP_ROUTER_ADDRESSES
+      });
+
+      // Set up message handler for full transaction objects
+      this.provider._websocket.on('message', (data: string) => {
+        try {
+          const message = JSON.parse(data);
+          
+          if (message.method === 'alchemy_pendingTransactions' && message.params?.result) {
+            const txData = message.params.result;
+            this.processAlchemyTransactionObject(txData).catch(error => {
+              this.logger.debug({
+                err: error,
+                txHash: txData.hash,
+                msg: 'Error processing Alchemy transaction object'
+              });
+            });
+          }
+        } catch (parseError: any) {
+          this.logger.debug({
+            err: parseError,
+            msg: 'Failed to parse Alchemy WebSocket message'
+          });
+        }
+      });
+
+    } catch (error: any) {
+      this.logger.warn({
+        err: error,
+        msg: 'Failed to subscribe to Alchemy pending transactions, falling back to standard subscription'
+      });
+      // Fallback to standard subscription
+      await this.subscribeStandardPendingTransactions();
+    }
+  }
+
+  private async processAlchemyTransactionObject(txData: any): Promise<void> {
+    if (this.metrics) {
+      this.metrics.incrementMempoolTxsSeen('alchemy');
+    }
+
+    try {
+      // Convert Alchemy tx object to ethers format
+      const tx: ethers.providers.TransactionResponse = {
+        hash: txData.hash,
+        to: txData.to,
+        from: txData.from,
+        data: txData.input || txData.data || '0x',
+        value: ethers.BigNumber.from(txData.value || '0x0'),
+        gasLimit: ethers.BigNumber.from(txData.gas || txData.gasLimit || '0x0'),
+        gasPrice: txData.gasPrice ? ethers.BigNumber.from(txData.gasPrice) : undefined,
+        maxFeePerGas: txData.maxFeePerGas ? ethers.BigNumber.from(txData.maxFeePerGas) : undefined,
+        maxPriorityFeePerGas: txData.maxPriorityFeePerGas ? ethers.BigNumber.from(txData.maxPriorityFeePerGas) : undefined,
+        nonce: parseInt(txData.nonce || '0x0', 16),
+        type: txData.type ? parseInt(txData.type, 16) : undefined,
+        blockNumber: txData.blockNumber ? parseInt(txData.blockNumber, 16) : undefined,
+        blockHash: txData.blockHash || undefined,
+        confirmations: 0,
+        wait: () => Promise.resolve({} as any),
+        chainId: txData.chainId ? parseInt(txData.chainId, 16) : 1,
+        r: txData.r,
+        s: txData.s,
+        v: txData.v ? parseInt(txData.v, 16) : undefined
+      };
+
+      if (!tx.to) {
+        return;
+      }
+
+      // Check if it's a Uniswap V3 transaction
+      if (!this.isUniswapV3Transaction(tx.to)) {
+        return;
+      }
+
+      // Check if already included
+      if (tx.blockNumber) {
+        this.logger.debug({
+          txHash: tx.hash,
+          blockNumber: tx.blockNumber,
+          msg: 'CandidateRejected',
+          reason: 'already_included'
+        });
+        return;
+      }
+
+      // For Alchemy events, we have the transaction input directly, so check if we need raw tx
+      let rawTxHex = '';
+      let rawTxSource = 'from_ws_object';
+
+      // If the event includes all the data we need, proceed without raw tx fetch
+      if (tx.data && tx.data !== '0x') {
+        this.logger.debug({
+          txHash: tx.hash,
+          msg: 'Using transaction data directly from Alchemy event'
+        });
+      } else {
+        // Fallback to fetching raw tx if needed
+        rawTxHex = await this.getRawSignedTransaction(tx.hash);
+        rawTxSource = rawTxHex ? 'http_fallback' : 'unavailable';
+        
+        if (!rawTxHex && !this.config.allowReconstructRawTx) {
+          if (this.metrics) {
+            this.metrics.incrementMempoolTxsRawMissing('alchemy-fallback');
+          }
+          this.logger.debug({
+            txHash: tx.hash,
+            allowReconstruct: this.config.allowReconstructRawTx,
+            msg: 'CandidateRejected',
+            reason: 'raw_tx_unavailable'
+          });
+          return;
+        }
+      }
+
+      if (rawTxHex) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolTxsRawFetched('alchemy-enhanced');
+        }
+      }
+
+      // Log the source of raw transaction data
+      this.logger.debug({
+        txHash: tx.hash,
+        raw_source: rawTxSource,
+        msg: 'Processing Alchemy transaction object'
+      });
+
+      // Parse transaction data
+      const swapData = await this.parseSwapTransaction(tx, rawTxHex || '');
+      if (!swapData) {
+        return;
+      }
+
+      // Update the provider field to indicate this came from Alchemy
+      swapData.provider = 'alchemy';
+
+      // Log SwapObserved IMMEDIATELY after decode and BEFORE amount threshold checks
+      if (this.config.logTargetPoolSwaps) {
+        this.logger.info({
+          msg: 'SwapObserved',
+          txHash: swapData.txHash,
+          poolAddress: swapData.poolAddress,
+          tokenIn: swapData.tokenIn,
+          tokenOut: swapData.tokenOut,
+          feeTier: swapData.feeTier,
+          direction: swapData.direction,
+          amountIn: swapData.amountIn,
+          amountInHuman: swapData.amountInHuman,
+          decodedMethod: swapData.decodedCall.method,
+          provider: 'alchemy'
+        });
+      }
+
+      // Increment decoded counter
+      if (this.metrics) {
+        this.metrics.incrementMempoolSwapsDecoded();
+      }
+
+      // Emit PendingSwapDetected BEFORE threshold validation for visibility
+      this.logger.info({
+        msg: 'PendingSwapDetected',
+        candidateId: swapData.candidateId,
+        txHash: swapData.txHash,
+        poolAddress: swapData.poolAddress,
+        tokenIn: swapData.tokenIn,
+        tokenOut: swapData.tokenOut,
+        amountIn: swapData.amountIn,
+        amountInHuman: swapData.amountInHuman,
+        feeTier: swapData.feeTier,
+        direction: swapData.direction,
+        estimatedUsd: swapData.estimatedUsd,
+        blockNumberSeen: swapData.blockNumberSeen,
+        timestamp: swapData.timestamp,
+        provider: swapData.provider,
+        decodedCall: swapData.decodedCall,
+        rawTxHex: swapData.rawTxHex ? 'available' : 'missing'
+      });
+
+      this.emit('PendingSwapDetected', swapData);
+
+      // Validate thresholds (for downstream filtering, but emission already happened)
+      const amountEth = parseFloat(ethers.utils.formatEther(swapData.amountIn));
+      const estimatedUsdValue = parseFloat(swapData.estimatedUsd);
+
+      if (amountEth < this.config.minSwapEth && estimatedUsdValue < this.config.minSwapUsd) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolSwapsRejected('amount_too_small');
+        }
+        this.logger.debug({
+          txHash: tx.hash,
+          amountEth,
+          estimatedUsdValue,
+          msg: 'CandidateRejected',
+          reason: 'amount_below_threshold'
+        });
+        return;
+      }
+
+      if (this.metrics) {
+        this.metrics.incrementMempoolSwapsMatched();
+      }
+
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: txData.hash,
+        msg: 'Failed to process Alchemy transaction object'
       });
     }
   }
@@ -447,8 +687,7 @@ export class MempoolWatcher extends EventEmitter {
     const normalizedTo = to.toLowerCase();
     
     // Check if it's a router transaction
-    if (normalizedTo === this.UNISWAP_V3_ROUTER.toLowerCase() ||
-        normalizedTo === this.UNISWAP_V3_ROUTER_V2.toLowerCase()) {
+    if (this.UNISWAP_ROUTER_ADDRESSES.some(addr => addr.toLowerCase() === normalizedTo)) {
       return true;
     }
     
@@ -466,8 +705,7 @@ export class MempoolWatcher extends EventEmitter {
     try {
       // Determine if this is a router or direct pool transaction
       const normalizedTo = tx.to!.toLowerCase();
-      const isRouter = normalizedTo === this.UNISWAP_V3_ROUTER.toLowerCase() ||
-                      normalizedTo === this.UNISWAP_V3_ROUTER_V2.toLowerCase();
+      const isRouter = this.UNISWAP_ROUTER_ADDRESSES.some(addr => addr.toLowerCase() === normalizedTo);
       
       if (isRouter) {
         return await this.parseRouterTransaction(tx, rawTxHex);
