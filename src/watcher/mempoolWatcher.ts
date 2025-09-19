@@ -151,11 +151,17 @@ export class MempoolWatcher extends EventEmitter {
    */
   private cleanupExpiredCache(): void {
     const now = Date.now();
-    for (const [txHash, timestamp] of this.seenTxHashes.entries()) {
+    const keysToDelete: string[] = [];
+    
+    this.seenTxHashes.forEach((timestamp, txHash) => {
       if (now - timestamp > this.CACHE_TTL_MS) {
-        this.seenTxHashes.delete(txHash);
+        keysToDelete.push(txHash);
       }
-    }
+    });
+    
+    keysToDelete.forEach(txHash => {
+      this.seenTxHashes.delete(txHash);
+    });
   }
 
   async start(): Promise<void> {
