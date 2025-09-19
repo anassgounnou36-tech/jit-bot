@@ -565,6 +565,67 @@ Both modes filter for transactions sent to canonical Uniswap router addresses:
 
 See `reports/sample-pending-abi.json` for an example of captured transaction structure from the ABI fallback path.
 
+## 🔗 Pending Uniswap V3 Watcher
+
+For reliably capturing pending Uniswap V3 swaps on Ethereum mainnet, the bot includes a specialized watcher that uses provider-agnostic WebSocket mempool access specifically optimized for Uniswap V3 router transactions.
+
+Environment variable:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `USE_PENDING_UNISWAP_V3` | When `true`, enables dedicated Uniswap V3 pending transaction monitoring that subscribes to `eth_subscribe newPendingTransactions`, filters for V3 router addresses, and decodes swap functions with retry logic and concurrency limiting. | `true` |
+
+### Uniswap V3 Focus
+
+This watcher specifically targets Uniswap V3 mainnet router addresses:
+- `0xE592427A0AEce92De3Edee1F18E0157C05861564` (SwapRouter)
+- `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` (SwapRouter02)
+
+### Supported V3 Functions
+
+The watcher decodes the following Uniswap V3 functions:
+- **`exactInputSingle`** - Single-hop exact input swaps
+- **`exactInput`** - Multi-hop exact input swaps (path-based)
+- **`multicall`** and **`multicall(uint256,bytes[])`** - Batch transactions with recursive parsing
+
+### Enhanced Features
+
+- ✅ **Concurrency limiting** - Limits parallel `getTransaction` calls to prevent overwhelming RPC providers
+- ✅ **Retry with backoff** - Exponential backoff for transient failures when fetching pending transactions
+- ✅ **Pending-only processing** - Only processes transactions not yet included in blocks
+- ✅ **Raw transaction capture** - Attempts to capture raw signed transaction data
+- ✅ **Structured logging** - Logs with `source="pending-univ3"` and `component="mempool-watcher"`
+
+### Example Configuration
+
+```bash
+# Enable pending Uniswap V3 monitoring
+USE_PENDING_UNISWAP_V3=true
+
+# Requires WebSocket RPC that supports eth_subscribe
+RPC_URL_WS=wss://eth-mainnet.ws.alchemyapi.io/v2/YOUR_KEY
+
+# Enable swap logging to see captured swaps
+LOG_TARGET_POOL_SWAPS=true
+MIN_SWAP_ETH=0
+MIN_SWAP_USD=0
+```
+
+When enabled, you should see log messages like:
+```
+SwapObserved source=pending-univ3 txHash=0x... poolAddress=0x... amountIn=1000000000
+PendingSwapDetected source=pending-univ3 candidateId=... decodedMethod=exactInputSingle
+```
+
+### Metrics and Monitoring
+
+Dedicated metrics track pending V3 activity:
+- `mempool_swaps_decoded_total{source="pending_univ3"}` - V3 swaps successfully decoded
+- `mempool_txs_seen_total{provider="pending_univ3"}` - Total transactions processed
+- `mempool_txs_raw_fetched_total{source="pending-univ3"}` - Raw transactions successfully captured
+
+See `reports/sample-pending-univ3.json` for examples of captured V3 transactions with decoded `exactInputSingle`, `exactInput`, and `multicall` structures.
+
 ### Orchestration Behavior
 
 1. **Concurrent Monitoring**: Each enabled pool runs its own mempool watcher

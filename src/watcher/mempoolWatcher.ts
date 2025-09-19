@@ -183,8 +183,14 @@ export class MempoolWatcher extends EventEmitter {
         activeSubscriptions.push('abi-fallback');
       }
 
-      // If neither is configured, fall back to standard subscription
-      if (!this.config.useAlchemyPendingTx && !this.config.useAbiPendingFallback) {
+      // Start Pending Uniswap V3 subscription if configured
+      if (this.config.usePendingUniswapV3) {
+        promises.push(this.subscribePendingUniswapV3());
+        activeSubscriptions.push('pending-univ3');
+      }
+
+      // If none are configured, fall back to standard subscription
+      if (!this.config.useAlchemyPendingTx && !this.config.useAbiPendingFallback && !this.config.usePendingUniswapV3) {
         promises.push(this.subscribeStandardPendingTransactions());
         activeSubscriptions.push('standard-pending');
       }
@@ -195,7 +201,7 @@ export class MempoolWatcher extends EventEmitter {
       this.logger.info({
         msg: 'Mempool watcher started successfully',
         subscriptions: activeSubscriptions,
-        deduplication: this.config.useAlchemyPendingTx && this.config.useAbiPendingFallback ? 'enabled' : 'disabled',
+        deduplication: 'enabled',
         features: ['raw-tx-capture', 'uniswap-decoding', 'pool-matching']
       });
     } catch (error: any) {
@@ -270,6 +276,68 @@ export class MempoolWatcher extends EventEmitter {
     });
   }
 
+  /**
+   * Subscribe to pending Uniswap V3 swaps using provider-agnostic WebSocket mempool access
+   * This implementation focuses specifically on Uniswap V3 router addresses
+   */
+  private async subscribePendingUniswapV3(): Promise<void> {
+    // Subscribe to generic pending transaction hashes
+    await this.provider.send('eth_subscribe', ['newPendingTransactions']);
+    
+    this.logger.info({
+      msg: 'Pending Uniswap V3 transactions subscription established',
+      source: 'pending-univ3',
+      component: 'mempool-watcher',
+      routers: [this.UNISWAP_V3_ROUTER, this.UNISWAP_V3_ROUTER_V2],
+      concurrencyLimit: 10
+    });
+
+    // Set up handler for transaction hashes with rate limiting
+    const processingQueue: Promise<void>[] = [];
+    let activeRequests = 0;
+    const maxConcurrency = 10;
+
+    this.provider.on('pending', (txHash: string) => {
+      // Skip if already seen (deduplication)
+      if (this.isTransactionSeen(txHash, 'pending-univ3')) {
+        return;
+      }
+
+      // Apply concurrency limit
+      if (activeRequests >= maxConcurrency) {
+        this.logger.debug({
+          txHash,
+          source: 'pending-univ3',
+          activeRequests,
+          maxConcurrency,
+          msg: 'Skipping due to concurrency limit'
+        });
+        return;
+      }
+
+      activeRequests++;
+      const processingPromise = this.processPendingUniswapV3Transaction(txHash)
+        .catch(error => {
+          this.logger.debug({
+            err: error,
+            txHash,
+            source: 'pending-univ3',
+            msg: 'Error processing pending Uniswap V3 transaction'
+          });
+        })
+        .finally(() => {
+          activeRequests--;
+        });
+
+      processingQueue.push(processingPromise);
+      
+      // Clean up completed promises to prevent memory leaks
+      if (processingQueue.length > 100) {
+        Promise.allSettled(processingQueue.splice(0, 50));
+      }
+    });
+  }
+
   private async subscribeAlchemyPendingTransactions(): Promise<void> {
     try {
       // Subscribe to Alchemy's enhanced pending transactions with filters
@@ -321,8 +389,130 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   /**
-   * Process transaction via ABI fallback path: fetch full tx, filter by router, and decode via ABI
+   * Process pending Uniswap V3 transaction with retry and backoff
    */
+  private async processPendingUniswapV3Transaction(txHash: string): Promise<void> {
+    if (this.metrics) {
+      this.metrics.incrementMempoolTxsSeen('pending_univ3');
+    }
+
+    try {
+      // Step 1: Fetch transaction with retry (pending transactions can be temporarily unavailable)
+      const tx = await this.getTransactionWithRetry(txHash, 3);
+      if (!tx || !tx.to) {
+        return;
+      }
+
+      // Step 2: Filter by Uniswap V3 router addresses only
+      const normalizedTo = tx.to.toLowerCase();
+      const isV3Router = [this.UNISWAP_V3_ROUTER, this.UNISWAP_V3_ROUTER_V2]
+        .some(addr => addr.toLowerCase() === normalizedTo);
+
+      if (!isV3Router) {
+        return; // Not a V3 router, skip
+      }
+
+      // Step 3: Check if transaction is already included in a block (only process pending)
+      if (tx.blockNumber) {
+        this.logger.debug({
+          txHash,
+          blockNumber: tx.blockNumber,
+          source: 'pending-univ3',
+          msg: 'CandidateRejected',
+          reason: 'already_included'
+        });
+        return;
+      }
+
+      // Step 4: Check minimum input length for valid function calls
+      if (!tx.data || tx.data.length < 10) { // 4 bytes = 8 hex chars + 0x
+        return;
+      }
+
+      // Step 5: Attempt to get raw transaction hex (with backoff/retry)
+      const rawTxHex = await this.getRawSignedTransactionWithRetry(txHash);
+      
+      // Allow proceeding without raw tx if reconstruction is enabled
+      if (!rawTxHex && !this.config.allowReconstructRawTx) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolTxsRawMissing('pending-univ3');
+        }
+        this.logger.debug({
+          txHash,
+          source: 'pending-univ3',
+          allowReconstruct: this.config.allowReconstructRawTx,
+          msg: 'CandidateRejected',
+          reason: 'raw_tx_unavailable'
+        });
+        return;
+      }
+
+      if (rawTxHex && this.metrics) {
+        this.metrics.incrementMempoolTxsRawFetched('pending-univ3');
+      }
+
+      // Step 6: Parse transaction via ABI decoding for V3 functions
+      const swapData = await this.parseUniswapV3Transaction(tx, rawTxHex || '');
+      if (!swapData) {
+        return;
+      }
+
+      // Step 7: Log SwapObserved for pending-univ3 source
+      if (this.config.logTargetPoolSwaps) {
+        this.logger.info({
+          msg: 'SwapObserved',
+          source: 'pending-univ3',
+          candidateId: swapData.candidateId,
+          txHash: swapData.txHash,
+          poolAddress: swapData.poolAddress,
+          tokenIn: swapData.tokenIn,
+          tokenOut: swapData.tokenOut,
+          feeTier: swapData.feeTier,
+          direction: swapData.direction,
+          amountIn: swapData.amountIn,
+          amountInHuman: swapData.amountInHuman,
+          decodedMethod: swapData.decodedCall.method
+        });
+      }
+
+      // Increment decoded counter with source label
+      if (this.metrics) {
+        this.metrics.incrementMempoolSwapsDecoded('pending_univ3');
+      }
+
+      // Step 8: Emit PendingSwapDetected with source tracking
+      this.logger.info({
+        msg: 'PendingSwapDetected',
+        source: 'pending-univ3',
+        candidateId: swapData.candidateId,
+        txHash: swapData.txHash,
+        poolAddress: swapData.poolAddress,
+        tokenIn: swapData.tokenIn,
+        tokenOut: swapData.tokenOut,
+        amountIn: swapData.amountIn,
+        amountInHuman: swapData.amountInHuman,
+        feeTier: swapData.feeTier,
+        direction: swapData.direction,
+        estimatedUsd: swapData.estimatedUsd,
+        decodedMethod: swapData.decodedCall.method,
+        provider: 'pending-univ3'
+      });
+
+      // Update provider to indicate this came from pending-univ3
+      swapData.provider = 'pending-univ3' as any;
+
+      // Emit the event 
+      this.emit('PendingSwapDetected', swapData);
+
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash,
+        source: 'pending-univ3',
+        msg: 'Error in pending Uniswap V3 transaction processing'
+      });
+    }
+  }
   private async processAbiFallbackTransaction(txHash: string): Promise<void> {
     if (this.metrics) {
       this.metrics.incrementMempoolTxsSeen('abi_fallback');
@@ -437,8 +627,153 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   /**
-   * Get raw signed transaction with retry and backoff for better reliability
+   * Get transaction with retry and backoff for better reliability with pending transactions
    */
+  private async getTransactionWithRetry(txHash: string, maxRetries: number = 3): Promise<ethers.providers.TransactionResponse | null> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const tx = await this.provider.getTransaction(txHash);
+        if (tx) {
+          return tx;
+        }
+      } catch (error: any) {
+        this.logger.debug({
+          err: error,
+          txHash,
+          attempt,
+          maxRetries,
+          source: 'pending-univ3',
+          msg: 'Error fetching transaction, retrying'
+        });
+      }
+
+      // Exponential backoff with jitter for pending transactions
+      if (attempt < maxRetries) {
+        const baseDelay = 50 * Math.pow(2, attempt - 1); // 50ms, 100ms, 200ms
+        const jitter = Math.random() * 25; // 0-25ms jitter
+        await new Promise(resolve => setTimeout(resolve, baseDelay + jitter));
+      }
+    }
+
+    return null; // Return null if all retries failed
+  }
+
+  /**
+   * Parse Uniswap V3 specific transaction (focuses only on V3 functions)
+   */
+  private async parseUniswapV3Transaction(tx: ethers.providers.TransactionResponse, rawTxHex: string): Promise<PendingSwapDetected | null> {
+    try {
+      const routerIface = new ethers.utils.Interface([
+        'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96))',
+        'function exactInput((bytes path, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum))',
+        'function multicall(bytes[] data) external payable',
+        'function multicall(uint256 deadline, bytes[] data) external payable'
+      ]);
+
+      // Try to decode the transaction
+      const methodId = tx.data.slice(0, 10);
+      let parsed: any;
+
+      try {
+        parsed = routerIface.parseTransaction({ data: tx.data, value: tx.value });
+      } catch (error: any) {
+        this.logger.debug({
+          txHash: tx.hash,
+          methodId,
+          source: 'pending-univ3',
+          msg: 'Failed to parse V3 router transaction',
+          err: error.message
+        });
+        return null;
+      }
+
+      // Handle supported V3 swap functions
+      switch (parsed.name) {
+        case 'exactInputSingle':
+          return await this.parseExactInputSingle(tx, rawTxHex, parsed.args);
+        
+        case 'exactInput':
+          return await this.parseExactInput(tx, rawTxHex, parsed.args);
+        
+        case 'multicall':
+          return await this.parseMulticallV3(tx, rawTxHex, parsed.args);
+        
+        default:
+          this.logger.debug({
+            txHash: tx.hash,
+            method: parsed.name,
+            source: 'pending-univ3',
+            msg: 'Unsupported V3 router method'
+          });
+          return null;
+      }
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        source: 'pending-univ3',
+        msg: 'Error parsing V3 transaction'
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Parse multicall specifically for V3 methods with recursive parsing
+   */
+  private async parseMulticallV3(
+    tx: ethers.providers.TransactionResponse, 
+    rawTxHex: string, 
+    args: any
+  ): Promise<PendingSwapDetected | null> {
+    try {
+      // Handle both multicall signatures: multicall(bytes[]) and multicall(uint256, bytes[])
+      let data: string[];
+      
+      if (args.length === 1) {
+        // multicall(bytes[] data)
+        data = args[0];
+      } else if (args.length === 2) {
+        // multicall(uint256 deadline, bytes[] data)
+        data = args[1];
+      } else {
+        this.logger.debug({
+          txHash: tx.hash,
+          source: 'pending-univ3',
+          msg: 'Unexpected multicall args length',
+          argsLength: args.length
+        });
+        return null;
+      }
+      
+      // Parse each call in the multicall for V3 functions
+      for (const callData of data) {
+        const methodId = callData.slice(0, 10);
+        
+        if (methodId === this.UNISWAP_V3_SIGNATURES.exactInputSingle || 
+            methodId === this.UNISWAP_V3_SIGNATURES.exactInput) {
+          
+          // Recursively parse the nested call
+          const nestedTx = { ...tx, data: callData };
+          const result = await this.parseUniswapV3Transaction(nestedTx, rawTxHex);
+          if (result) {
+            result.decodedCall.method = 'multicall->' + result.decodedCall.method;
+            return result;
+          }
+        }
+      }
+      
+      return null;
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        source: 'pending-univ3',
+        msg: 'Error parsing V3 multicall'
+      });
+      return null;
+    }
+  }
   private async getRawSignedTransactionWithRetry(txHash: string, maxRetries: number = 3): Promise<string> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {

@@ -94,6 +94,9 @@ export interface JitBotConfig {
   // ABI-based pending transaction fallback
   useAbiPendingFallback: boolean;
   
+  // Pending Uniswap V3 watcher
+  usePendingUniswapV3: boolean;
+  
   // Contract addresses
   jitContractAddress?: string;
   chainConfig: ChainConfig;
@@ -266,6 +269,9 @@ export function loadConfig(): JitBotConfig {
   // ABI-based pending transaction fallback configuration
   const useAbiPendingFallback = parseBool(process.env.USE_ABI_PENDING_FALLBACK, true);
   
+  // Pending Uniswap V3 watcher configuration
+  const usePendingUniswapV3 = parseBool(process.env.USE_PENDING_UNISWAP_V3, true);
+  
   // Contract configuration
   const jitContractAddress = process.env.JIT_CONTRACT_ADDRESS;
   
@@ -331,6 +337,7 @@ export function loadConfig(): JitBotConfig {
     maxBundlesPerBlock,
     useAlchemyPendingTx,
     useAbiPendingFallback,
+    usePendingUniswapV3,
     jitContractAddress,
     chainConfig,
     flashLoanProviders: jsonConfig.flashLoanProviders || {},
