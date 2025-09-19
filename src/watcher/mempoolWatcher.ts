@@ -12,6 +12,7 @@ export interface PendingSwapDetected {
   tokenOut: string;
   amountIn: string;
   amountInHuman: string;
+  amountOutMin?: string; // Optional field from exactInputSingle/exactInput
   feeTier: number;
   direction: 'token0->token1' | 'token1->token0';
   estimatedUsd: string;
@@ -68,6 +69,7 @@ export class MempoolWatcher extends EventEmitter {
     exactInputSingle: '0x414bf389',
     exactInput: '0xc04b8d59',
     multicall: '0xac9650d8',
+    multicallWithDeadline: '0x5ae401dc',
     swap: '0x128acb08'
   };
 
@@ -198,29 +200,40 @@ export class MempoolWatcher extends EventEmitter {
 
       // Step 5: Attempt to get raw transaction hex
       const rawTxHex = await this.getRawSignedTransaction(txHash);
+      
+      // Don't reject if raw tx unavailable when reconstruction is allowed
       if (!rawTxHex && !this.config.allowReconstructRawTx) {
         if (this.metrics) {
           this.metrics.incrementMempoolTxsRawMissing('local-node');
         }
         this.logger.debug({
           txHash,
+          allowReconstruct: this.config.allowReconstructRawTx,
           msg: 'CandidateRejected',
           reason: 'raw_tx_unavailable'
         });
         return;
       }
 
-      if (this.metrics) {
-        this.metrics.incrementMempoolTxsRawFetched('local-node');
+      if (rawTxHex) {
+        if (this.metrics) {
+          this.metrics.incrementMempoolTxsRawFetched('local-node');
+        }
+      } else {
+        this.logger.warn({
+          txHash,
+          allowReconstruct: this.config.allowReconstructRawTx,
+          msg: 'Proceeding without raw transaction - rawTxHex will be empty'
+        });
       }
 
       // Step 6: Parse transaction data
-      const swapData = await this.parseSwapTransaction(tx, rawTxHex || '0x');
+      const swapData = await this.parseSwapTransaction(tx, rawTxHex || '');
       if (!swapData) {
         return;
       }
 
-      // Optional logging for all observed swaps in targeted pools
+      // Log SwapObserved IMMEDIATELY after decode and BEFORE amount threshold checks
       if (this.config.logTargetPoolSwaps) {
         this.logger.info({
           msg: 'SwapObserved',
@@ -232,10 +245,38 @@ export class MempoolWatcher extends EventEmitter {
           direction: swapData.direction,
           amountIn: swapData.amountIn,
           amountInHuman: swapData.amountInHuman,
+          decodedMethod: swapData.decodedCall.method
         });
       }
 
-      // Step 7: Validate thresholds
+      // Increment decoded counter
+      if (this.metrics) {
+        this.metrics.incrementMempoolSwapsDecoded();
+      }
+
+      // Step 7: Emit PendingSwapDetected BEFORE threshold validation for visibility
+      this.logger.info({
+        msg: 'PendingSwapDetected',
+        candidateId: swapData.candidateId,
+        txHash: swapData.txHash,
+        poolAddress: swapData.poolAddress,
+        tokenIn: swapData.tokenIn,
+        tokenOut: swapData.tokenOut,
+        amountIn: swapData.amountIn,
+        amountInHuman: swapData.amountInHuman,
+        feeTier: swapData.feeTier,
+        direction: swapData.direction,
+        estimatedUsd: swapData.estimatedUsd,
+        blockNumberSeen: swapData.blockNumberSeen,
+        timestamp: swapData.timestamp,
+        provider: swapData.provider,
+        decodedCall: swapData.decodedCall,
+        rawTxHex: swapData.rawTxHex ? 'available' : 'missing'
+      });
+
+      this.emit('PendingSwapDetected', swapData);
+
+      // Step 8: Validate thresholds (for downstream filtering, but emission already happened)
       const amountEth = parseFloat(ethers.utils.formatEther(swapData.amountIn));
       const estimatedUsdValue = parseFloat(swapData.estimatedUsd);
 
@@ -257,27 +298,6 @@ export class MempoolWatcher extends EventEmitter {
         this.metrics.incrementMempoolSwapsMatched();
       }
 
-      // Step 8: Emit PendingSwapDetected
-      this.logger.info({
-        msg: 'PendingSwapDetected',
-        candidateId: swapData.candidateId,
-        txHash: swapData.txHash,
-        poolAddress: swapData.poolAddress,
-        tokenIn: swapData.tokenIn,
-        tokenOut: swapData.tokenOut,
-        amountIn: swapData.amountIn,
-        amountInHuman: swapData.amountInHuman,
-        feeTier: swapData.feeTier,
-        direction: swapData.direction,
-        estimatedUsd: swapData.estimatedUsd,
-        blockNumberSeen: swapData.blockNumberSeen,
-        timestamp: swapData.timestamp,
-        provider: swapData.provider,
-        decodedCall: swapData.decodedCall
-      });
-
-      this.emit('PendingSwapDetected', swapData);
-
     } catch (error: any) {
       this.logger.debug({
         err: error,
@@ -288,10 +308,19 @@ export class MempoolWatcher extends EventEmitter {
   }
 
   private async getRawSignedTransaction(txHash: string): Promise<string> {
+    let rawTx = '';
+    let source = 'unknown';
+
     try {
       // Try local node first
-      const rawTx = await this.provider.send('eth_getRawTransactionByHash', [txHash]);
+      rawTx = await this.provider.send('eth_getRawTransactionByHash', [txHash]);
       if (rawTx && rawTx !== '0x') {
+        source = 'raw_from_ws';
+        this.logger.debug({
+          txHash,
+          source,
+          msg: 'Raw transaction retrieved from primary provider'
+        });
         return rawTx;
       }
     } catch (error: any) {
@@ -305,8 +334,14 @@ export class MempoolWatcher extends EventEmitter {
     // Try fallback provider if available
     if (this.fallbackProvider) {
       try {
-        const rawTx = await this.fallbackProvider.send('eth_getRawTransactionByHash', [txHash]);
+        rawTx = await this.fallbackProvider.send('eth_getRawTransactionByHash', [txHash]);
         if (rawTx && rawTx !== '0x') {
+          source = 'raw_from_http_fallback';
+          this.logger.debug({
+            txHash,
+            source,
+            msg: 'Raw transaction retrieved from fallback provider'
+          });
           return rawTx;
         }
       } catch (error: any) {
@@ -318,22 +353,136 @@ export class MempoolWatcher extends EventEmitter {
       }
     }
 
+    // If raw tx unavailable and reconstruction is allowed, try to reconstruct
+    if (this.config.allowReconstructRawTx) {
+      try {
+        const tx = await this.provider.getTransaction(txHash);
+        if (tx && tx.v && tx.r && tx.s) {
+          const reconstructed = this.reconstructRawTransaction(tx);
+          if (reconstructed) {
+            source = 'raw_reconstructed';
+            this.logger.debug({
+              txHash,
+              source,
+              msg: 'Raw transaction reconstructed from transaction data'
+            });
+            return reconstructed;
+          }
+        } else {
+          this.logger.debug({
+            txHash,
+            msg: 'Cannot reconstruct: missing signature components (v/r/s)'
+          });
+        }
+      } catch (error: any) {
+        this.logger.debug({
+          err: error,
+          txHash,
+          msg: 'Failed to reconstruct raw transaction'
+        });
+      }
+    }
+
+    source = 'raw_unavailable';
+    this.logger.debug({
+      txHash,
+      source,
+      allowReconstruct: this.config.allowReconstructRawTx,
+      msg: 'Raw transaction unavailable'
+    });
+
     return '';
+  }
+
+  private reconstructRawTransaction(tx: ethers.providers.TransactionResponse): string | null {
+    try {
+      // Prepare transaction data for serialization
+      const txData: any = {
+        to: tx.to,
+        value: tx.value,
+        data: tx.data,
+        gasLimit: tx.gasLimit,
+        gasPrice: tx.gasPrice,
+        nonce: tx.nonce,
+        type: tx.type || 0,
+        chainId: tx.chainId
+      };
+
+      // Add EIP-1559 fields if present
+      if (tx.maxFeePerGas) {
+        txData.maxFeePerGas = tx.maxFeePerGas;
+      }
+      if (tx.maxPriorityFeePerGas) {
+        txData.maxPriorityFeePerGas = tx.maxPriorityFeePerGas;
+      }
+
+      // Create signature object
+      const signature = {
+        v: tx.v!,
+        r: tx.r!,
+        s: tx.s!
+      };
+
+      // Serialize the transaction with signature
+      return ethers.utils.serializeTransaction(txData, signature);
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        msg: 'Error reconstructing raw transaction'
+      });
+      return null;
+    }
   }
 
   private isUniswapV3Transaction(to: string): boolean {
     const normalizedTo = to.toLowerCase();
-    return normalizedTo === this.UNISWAP_V3_ROUTER.toLowerCase() ||
-           normalizedTo === this.UNISWAP_V3_ROUTER_V2.toLowerCase();
+    
+    // Check if it's a router transaction
+    if (normalizedTo === this.UNISWAP_V3_ROUTER.toLowerCase() ||
+        normalizedTo === this.UNISWAP_V3_ROUTER_V2.toLowerCase()) {
+      return true;
+    }
+    
+    // Check if it's a direct pool transaction
+    for (const pool of this.config.pools) {
+      if (pool.address.toLowerCase() === normalizedTo) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   private async parseSwapTransaction(tx: ethers.providers.TransactionResponse, rawTxHex: string): Promise<PendingSwapDetected | null> {
     try {
-      const iface = new ethers.utils.Interface([
+      // Determine if this is a router or direct pool transaction
+      const normalizedTo = tx.to!.toLowerCase();
+      const isRouter = normalizedTo === this.UNISWAP_V3_ROUTER.toLowerCase() ||
+                      normalizedTo === this.UNISWAP_V3_ROUTER_V2.toLowerCase();
+      
+      if (isRouter) {
+        return await this.parseRouterTransaction(tx, rawTxHex);
+      } else {
+        return await this.parseDirectPoolTransaction(tx, rawTxHex);
+      }
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        msg: 'Error parsing swap transaction'
+      });
+      return null;
+    }
+  }
+
+  private async parseRouterTransaction(tx: ethers.providers.TransactionResponse, rawTxHex: string): Promise<PendingSwapDetected | null> {
+    try {
+      const routerIface = new ethers.utils.Interface([
         'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96))',
         'function exactInput((bytes path, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum))',
-        'function multicall(uint256 deadline, bytes[] data) external payable',
-        'function swap(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)'
+        'function multicall(bytes[] data) external payable',
+        'function multicall(uint256 deadline, bytes[] data) external payable'
       ]);
 
       // Try to decode the transaction
@@ -341,12 +490,12 @@ export class MempoolWatcher extends EventEmitter {
       let parsed: any;
 
       try {
-        parsed = iface.parseTransaction({ data: tx.data, value: tx.value });
+        parsed = routerIface.parseTransaction({ data: tx.data, value: tx.value });
       } catch (error: any) {
         this.logger.debug({
           txHash: tx.hash,
           methodId,
-          msg: 'Failed to parse transaction',
+          msg: 'Failed to parse router transaction',
           err: error.message
         });
         return null;
@@ -367,7 +516,7 @@ export class MempoolWatcher extends EventEmitter {
           this.logger.debug({
             txHash: tx.hash,
             method: parsed.name,
-            msg: 'Unsupported swap method'
+            msg: 'Unsupported router method'
           });
           return null;
       }
@@ -375,7 +524,40 @@ export class MempoolWatcher extends EventEmitter {
       this.logger.debug({
         err: error,
         txHash: tx.hash,
-        msg: 'Error parsing swap transaction'
+        msg: 'Error parsing router transaction'
+      });
+      return null;
+    }
+  }
+
+  private async parseDirectPoolTransaction(tx: ethers.providers.TransactionResponse, rawTxHex: string): Promise<PendingSwapDetected | null> {
+    try {
+      const poolIface = new ethers.utils.Interface([
+        'function swap(address recipient, bool zeroForOne, int256 amountSpecified, uint160 sqrtPriceLimitX96, bytes data)'
+      ]);
+
+      let parsed: any;
+      try {
+        parsed = poolIface.parseTransaction({ data: tx.data, value: tx.value });
+      } catch (error: any) {
+        this.logger.debug({
+          txHash: tx.hash,
+          msg: 'Failed to parse direct pool transaction',
+          err: error.message
+        });
+        return null;
+      }
+
+      if (parsed.name === 'swap') {
+        return await this.parseDirectPoolSwap(tx, rawTxHex, parsed.args);
+      }
+
+      return null;
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        msg: 'Error parsing direct pool transaction'
       });
       return null;
     }
@@ -388,7 +570,7 @@ export class MempoolWatcher extends EventEmitter {
   ): Promise<PendingSwapDetected | null> {
     try {
       const params = args[0]; // exactInputSingle takes a struct as first param
-      const { tokenIn, tokenOut, fee, amountIn } = params;
+      const { tokenIn, tokenOut, fee, amountIn, amountOutMinimum } = params;
 
       // Find target pool
       const poolKey = `${tokenIn.toLowerCase()}-${tokenOut.toLowerCase()}-${fee}`;
@@ -416,6 +598,7 @@ export class MempoolWatcher extends EventEmitter {
         tokenOut,
         amountIn: amountIn.toString(),
         amountInHuman: this.formatTokenAmount(amountIn, tokenIn === targetPool.token0 ? targetPool.decimals0 : targetPool.decimals1),
+        amountOutMin: amountOutMinimum ? amountOutMinimum.toString() : undefined,
         feeTier: fee,
         direction,
         estimatedUsd: estimatedUsdValue.toString(),
@@ -429,6 +612,7 @@ export class MempoolWatcher extends EventEmitter {
             tokenOut,
             fee,
             amountIn: amountIn.toString(),
+            amountOutMinimum: amountOutMinimum ? amountOutMinimum.toString() : undefined,
             recipient: params.recipient,
             deadline: params.deadline.toString()
           }
@@ -440,10 +624,6 @@ export class MempoolWatcher extends EventEmitter {
         poolFeeTier: fee,
         calldata: tx.data
       };
-
-      if (this.metrics) {
-        this.metrics.incrementMempoolSwapsDecoded();
-      }
 
       return swapData;
     } catch (error: any) {
@@ -462,7 +642,7 @@ export class MempoolWatcher extends EventEmitter {
     args: any
   ): Promise<PendingSwapDetected | null> {
     try {
-      const { path, amountIn } = args;
+      const { path, amountIn, amountOutMinimum } = args;
       
       // Decode path to get tokens and fees
       const pathInfo = this.decodePath(path);
@@ -501,6 +681,7 @@ export class MempoolWatcher extends EventEmitter {
         tokenOut,
         amountIn: amountIn.toString(),
         amountInHuman: this.formatTokenAmount(amountIn, tokenIn === targetPool.token0 ? targetPool.decimals0 : targetPool.decimals1),
+        amountOutMin: amountOutMinimum ? amountOutMinimum.toString() : undefined,
         feeTier: fee,
         direction,
         estimatedUsd: estimatedUsdValue.toString(),
@@ -512,6 +693,7 @@ export class MempoolWatcher extends EventEmitter {
           params: {
             path: pathInfo,
             amountIn: amountIn.toString(),
+            amountOutMinimum: amountOutMinimum ? amountOutMinimum.toString() : undefined,
             recipient: args.recipient,
             deadline: args.deadline.toString()
           }
@@ -523,10 +705,6 @@ export class MempoolWatcher extends EventEmitter {
         poolFeeTier: fee,
         calldata: tx.data
       };
-
-      if (this.metrics) {
-        this.metrics.incrementMempoolSwapsDecoded();
-      }
 
       return swapData;
     } catch (error: any) {
@@ -545,7 +723,23 @@ export class MempoolWatcher extends EventEmitter {
     args: any
   ): Promise<PendingSwapDetected | null> {
     try {
-      const { data } = args;
+      // Handle both multicall signatures: multicall(bytes[]) and multicall(uint256, bytes[])
+      let data: string[];
+      
+      if (args.length === 1) {
+        // multicall(bytes[] data)
+        data = args[0];
+      } else if (args.length === 2) {
+        // multicall(uint256 deadline, bytes[] data)
+        data = args[1];
+      } else {
+        this.logger.debug({
+          txHash: tx.hash,
+          msg: 'Unexpected multicall args length',
+          argsLength: args.length
+        });
+        return null;
+      }
       
       // Parse each call in the multicall
       for (const callData of data) {
@@ -556,7 +750,7 @@ export class MempoolWatcher extends EventEmitter {
           
           // Recursively parse the nested call
           const nestedTx = { ...tx, data: callData };
-          const result = await this.parseSwapTransaction(nestedTx, rawTxHex);
+          const result = await this.parseRouterTransaction(nestedTx, rawTxHex);
           if (result) {
             result.decodedCall.method = 'multicall->' + result.decodedCall.method;
             return result;
@@ -570,6 +764,87 @@ export class MempoolWatcher extends EventEmitter {
         err: error,
         txHash: tx.hash,
         msg: 'Error parsing multicall'
+      });
+      return null;
+    }
+  }
+
+  private async parseDirectPoolSwap(
+    tx: ethers.providers.TransactionResponse, 
+    rawTxHex: string, 
+    args: any
+  ): Promise<PendingSwapDetected | null> {
+    try {
+      const { recipient, zeroForOne, amountSpecified } = args;
+      
+      // Find the target pool by address
+      const poolAddress = tx.to!.toLowerCase();
+      let targetPool: any = null;
+      
+      for (const pool of this.config.pools) {
+        if (pool.address.toLowerCase() === poolAddress) {
+          targetPool = pool;
+          break;
+        }
+      }
+      
+      if (!targetPool) {
+        return null; // Pool not in our target list
+      }
+      
+      // Determine tokenIn/tokenOut from zeroForOne
+      const tokenIn = zeroForOne ? targetPool.token0 : targetPool.token1;
+      const tokenOut = zeroForOne ? targetPool.token1 : targetPool.token0;
+      
+      // Convert amountSpecified (which can be negative) to amountIn
+      const amountIn = amountSpecified.lt(0) ? amountSpecified.abs() : amountSpecified;
+      
+      // Determine direction
+      const direction = zeroForOne ? 'token0->token1' : 'token1->token0';
+      
+      // Estimate USD value
+      const estimatedUsdValue = await this.estimateUSDValue(tokenIn, amountIn);
+      
+      const currentBlock = await this.provider.getBlockNumber();
+      
+      const swapData: PendingSwapDetected = {
+        candidateId: `${tx.hash}_${Math.floor(Date.now() / 1000)}`,
+        txHash: tx.hash!,
+        rawTxHex,
+        poolAddress: targetPool.address,
+        tokenIn,
+        tokenOut,
+        amountIn: amountIn.toString(),
+        amountInHuman: this.formatTokenAmount(amountIn, zeroForOne ? targetPool.decimals0 : targetPool.decimals1),
+        feeTier: targetPool.fee,
+        direction,
+        estimatedUsd: estimatedUsdValue.toString(),
+        blockNumberSeen: currentBlock,
+        timestamp: Math.floor(Date.now() / 1000),
+        provider: 'local-node',
+        decodedCall: {
+          method: 'swap',
+          params: {
+            recipient,
+            zeroForOne,
+            amountSpecified: amountSpecified.toString(),
+            poolAddress: targetPool.address
+          }
+        },
+        // Legacy compatibility
+        id: tx.hash,
+        poolId: targetPool.pool,
+        amountUSD: estimatedUsdValue.toString(),
+        poolFeeTier: targetPool.fee,
+        calldata: tx.data
+      };
+      
+      return swapData;
+    } catch (error: any) {
+      this.logger.debug({
+        err: error,
+        txHash: tx.hash,
+        msg: 'Error parsing direct pool swap'
       });
       return null;
     }
