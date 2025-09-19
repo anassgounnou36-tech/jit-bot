@@ -170,6 +170,49 @@ describe('MempoolWatcher Decode Tests', () => {
     return iface.encodeFunctionData('exactInput', [params]);
   }
 
+  function createExactOutputSingleCalldata(): string {
+    // Create mock exactOutputSingle calldata  
+    const iface = new ethers.utils.Interface([
+      'function exactOutputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96))'
+    ]);
+    
+    const params = {
+      tokenIn: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // WETH
+      tokenOut: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC  
+      fee: 500, // 0.05%
+      recipient: '0x1234567890123456789012345678901234567890',
+      deadline: Math.floor(Date.now() / 1000) + 300,
+      amountOut: ethers.utils.parseUnits('1000', 6), // Want exactly 1000 USDC
+      amountInMaximum: ethers.utils.parseEther('0.6'), // Max 0.6 ETH
+      sqrtPriceLimitX96: 0
+    };
+    
+    return iface.encodeFunctionData('exactOutputSingle', [params]);
+  }
+
+  function createExactOutputCalldata(): string {
+    // Create mock exactOutput calldata with encoded path
+    const iface = new ethers.utils.Interface([
+      'function exactOutput((bytes path, address recipient, uint256 deadline, uint256 amountOut, uint256 amountInMaximum))'
+    ]);
+    
+    // Encode path: WETH -> 0.05% -> USDC (note: path is reversed for exactOutput)
+    const path = ethers.utils.solidityPack(
+      ['address', 'uint24', 'address'],
+      ['0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', 500, '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48']
+    );
+    
+    const params = {
+      path,
+      recipient: '0x1234567890123456789012345678901234567890',
+      deadline: Math.floor(Date.now() / 1000) + 300,
+      amountOut: ethers.utils.parseUnits('1000', 6), // Want exactly 1000 USDC
+      amountInMaximum: ethers.utils.parseEther('0.6') // Max 0.6 ETH  
+    };
+    
+    return iface.encodeFunctionData('exactOutput', [params]);
+  }
+
   function createMulticallCalldata(): string {
     // Create multicall containing exactInputSingle
     const iface = new ethers.utils.Interface([
@@ -252,6 +295,46 @@ describe('MempoolWatcher Decode Tests', () => {
       expect(result.feeTier).to.equal(500);
       expect(result.decodedCall.method).to.equal('exactInput');
       expect(result.amountOutMin).to.not.be.undefined;
+    });
+  });
+
+  describe('exactOutputSingle Decoding', () => {
+    it('should decode exactOutputSingle transaction and emit candidate', async () => {
+      const calldata = createExactOutputSingleCalldata();
+      const tx = createMockTransaction('0xtest_outputSingle', '0xE592427A0AEce92De3Edee1F18E0157C05861564', calldata);
+      
+      const result = await (watcher as any).parseSwapTransaction(tx, '');
+      
+      expect(result).to.not.be.null;
+      expect(result.txHash).to.equal('0xtest_outputSingle');
+      expect(result.poolAddress).to.equal('0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8');
+      expect(result.tokenIn).to.equal('0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2');
+      expect(result.tokenOut).to.equal('0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48');
+      expect(result.feeTier).to.equal(500);
+      expect(result.direction).to.equal('token1->token0');
+      expect(result.amountInHuman).to.not.be.empty;
+      expect(result.decodedCall.method).to.equal('exactOutputSingle');
+      expect(result.decodedCall.params.amountOut).to.not.be.undefined;
+      expect(result.decodedCall.params.amountInMaximum).to.not.be.undefined;
+    });
+  });
+
+  describe('exactOutput Decoding', () => {
+    it('should decode exactOutput path correctly', async () => {
+      const calldata = createExactOutputCalldata();
+      const tx = createMockTransaction('0xtest_output', '0xE592427A0AEce92De3Edee1F18E0157C05861564', calldata);
+      
+      const result = await (watcher as any).parseSwapTransaction(tx, '');
+      
+      expect(result).to.not.be.null;
+      expect(result.txHash).to.equal('0xtest_output');
+      expect(result.poolAddress).to.equal('0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8');
+      expect(result.tokenIn).to.equal('0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2');
+      expect(result.tokenOut).to.equal('0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48');
+      expect(result.feeTier).to.equal(500);
+      expect(result.decodedCall.method).to.equal('exactOutput');
+      expect(result.decodedCall.params.amountOut).to.not.be.undefined;
+      expect(result.decodedCall.params.amountInMaximum).to.not.be.undefined;
     });
   });
 

@@ -346,6 +346,10 @@ export function logStartupConfiguration(): void {
     globalMinProfitUsd: config.globalMinProfitUsd,
     poolIds: config.poolIds,
     prometheusPort: config.prometheusPort,
+    useAlchemyPendingTx: config.useAlchemyPendingTx,
+    useAbiPendingFallback: config.useAbiPendingFallback,
+    logAllPendingTx: config.logAllPendingTx,
+    pendingFeedWarnThresholdPerMin: config.pendingFeedWarnThresholdPerMin,
     component: 'startup'
   });
   
