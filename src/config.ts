@@ -88,6 +88,9 @@ export interface JitBotConfig {
   allowReconstructRawTx: boolean;
   maxBundlesPerBlock: number;
   
+  // Alchemy-specific configuration
+  useAlchemyPendingTx: boolean;
+  
   // Contract addresses
   jitContractAddress?: string;
   chainConfig: ChainConfig;
@@ -254,6 +257,9 @@ export function loadConfig(): JitBotConfig {
   const allowReconstructRawTx = process.env.ALLOW_RECONSTRUCT_RAW_TX === 'true';
   const maxBundlesPerBlock = parseInt(process.env.MAX_BUNDLES_PER_BLOCK || '1');
   
+  // Alchemy configuration
+  const useAlchemyPendingTx = parseBool(process.env.USE_ALCHEMY_PENDING_TX, false);
+  
   // Contract configuration
   const jitContractAddress = process.env.JIT_CONTRACT_ADDRESS;
   
@@ -317,6 +323,7 @@ export function loadConfig(): JitBotConfig {
     flashloanProviderPriority,
     allowReconstructRawTx,
     maxBundlesPerBlock,
+    useAlchemyPendingTx,
     jitContractAddress,
     chainConfig,
     flashLoanProviders: jsonConfig.flashLoanProviders || {},
