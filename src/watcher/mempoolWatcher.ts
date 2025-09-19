@@ -402,18 +402,26 @@ export class MempoolWatcher extends EventEmitter {
         value: tx.value,
         data: tx.data,
         gasLimit: tx.gasLimit,
-        gasPrice: tx.gasPrice,
         nonce: tx.nonce,
-        type: tx.type || 0,
         chainId: tx.chainId
       };
 
-      // Add EIP-1559 fields if present
-      if (tx.maxFeePerGas) {
-        txData.maxFeePerGas = tx.maxFeePerGas;
-      }
-      if (tx.maxPriorityFeePerGas) {
-        txData.maxPriorityFeePerGas = tx.maxPriorityFeePerGas;
+      // Handle different transaction types
+      if (tx.type === 2) {
+        // EIP-1559 transaction
+        txData.type = 2;
+        if (tx.maxFeePerGas) {
+          txData.maxFeePerGas = tx.maxFeePerGas;
+        }
+        if (tx.maxPriorityFeePerGas) {
+          txData.maxPriorityFeePerGas = tx.maxPriorityFeePerGas;
+        }
+      } else {
+        // Legacy transaction
+        txData.type = tx.type || 0;
+        if (tx.gasPrice) {
+          txData.gasPrice = tx.gasPrice;
+        }
       }
 
       // Create signature object
