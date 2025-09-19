@@ -17,3 +17,4 @@ reports/*.md
 !reports/.gitkeep
 !reports/fixture-*.json
 !reports/sample-pending-candidate.json
+!reports/sample-mempool-swap.json

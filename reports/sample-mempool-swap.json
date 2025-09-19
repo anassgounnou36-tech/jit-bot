@@ -1,0 +1,55 @@
+{
+  "description": "Sample mempool swap captured using Alchemy alchemy_pendingTransactions subscription",
+  "timestamp": "2024-01-15T10:30:45.123Z",
+  "source": "alchemy_pendingTransactions",
+  "candidate": {
+    "candidateId": "swap_0xabc123def456_20241115_103045",
+    "txHash": "0xabc123def456789abcdef123456789abcdef123456789abcdef123456789abcdef",
+    "rawTxHex": "0x02f8b1...[truncated for privacy]",
+    "poolAddress": "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8",
+    "tokenIn": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "tokenOut": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "amountIn": "1000000000",
+    "amountInHuman": "1000.0 USDC",
+    "amountOutMin": "395000000000000000",
+    "feeTier": 500,
+    "direction": "token0->token1",
+    "estimatedUsd": "1000.0",
+    "blockNumberSeen": 18500000,
+    "timestamp": 1705316645123,
+    "provider": "alchemy",
+    "decodedCall": {
+      "method": "exactInputSingle",
+      "params": {
+        "tokenIn": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "tokenOut": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "fee": 500,
+        "recipient": "0x742d35Cc6673C028C0Cd3cc5d5f0c3BaF21dd88",
+        "deadline": 1705316945,
+        "amountIn": "1000000000",
+        "amountOutMinimum": "395000000000000000",
+        "sqrtPriceLimitX96": "0"
+      }
+    },
+    "id": "swap_0xabc123def456_20241115_103045",
+    "poolId": "USDC-WETH-0.05%",
+    "amountUSD": "1000.0",
+    "poolFeeTier": 500,
+    "calldata": "0x414bf389000000000000000000000000...[truncated]",
+    "amountOutEstimated": "0.395",
+    "from": "0x742d35Cc6673C028C0Cd3cc5d5f0c3BaF21dd88",
+    "to": "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+  },
+  "metadata": {
+    "captureMode": "alchemy_pendingTransactions",
+    "rawTxSource": "from_ws_object",
+    "routerAddress": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+    "routerName": "Uniswap V3 SwapRouter",
+    "poolName": "USDC/WETH 0.05%",
+    "notes": [
+      "Transaction captured directly from Alchemy WebSocket with full tx object",
+      "No additional RPC calls needed for transaction data",
+      "Addresses have been sanitized for privacy"
+    ]
+  }
+}
