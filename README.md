@@ -1292,6 +1292,52 @@ Expected output should show:
 - `ethers@5.x.x`
 - `@nomiclabs/hardhat-ethers@2.x.x`
 
+## 🔧 Troubleshooting
+
+### Mempool Monitoring Issues
+
+If you're seeing "0 opportunities" despite active trading on target pools:
+
+1. **Enable detailed logging:**
+   ```bash
+   export LOG_TARGET_POOL_SWAPS=true
+   export ALLOW_RECONSTRUCT_RAW_TX=true
+   ```
+
+2. **Lower thresholds for testing:**
+   ```bash
+   export MIN_SWAP_ETH=0
+   export MIN_SWAP_USD=0
+   ```
+
+3. **Verify mempool connection:**
+   - Check that `mempool_txs_seen_total` metric is increasing
+   - Confirm WebSocket connection to your RPC provider
+   - Look for "SwapObserved" log lines within a few minutes on mainnet
+
+4. **Common fixes:**
+   - Ensure your RPC provider supports `eth_getRawTransactionByHash`
+   - Verify your WebSocket URL is correct and accessible
+   - Check that your target pools are properly configured in `config.json`
+   - Enable raw transaction reconstruction with `ALLOW_RECONSTRUCT_RAW_TX=true`
+
+5. **Debug sequence:**
+   ```bash
+   # Start with maximum logging
+   export LOG_TARGET_POOL_SWAPS=true
+   export MIN_SWAP_ETH=0
+   export MIN_SWAP_USD=0
+   export ALLOW_RECONSTRUCT_RAW_TX=true
+   
+   # Run in development mode
+   npm run dev
+   
+   # Watch for these log messages:
+   # - "SwapObserved" = successful decode
+   # - "PendingSwapDetected" = candidate emitted
+   # - "mempool_txs_seen_total" = mempool activity
+   ```
+
 ## 🤝 Contributing
 
 1. Fork the repository
